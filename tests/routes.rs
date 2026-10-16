@@ -551,6 +551,7 @@ async fn targets_list_in_pass_order_and_narrow_by_consumer_and_subject() {
   assert_eq!(names(service.get("/targets?consumer=receiver").await.1), vec!["receiver/chat"]);
   assert_eq!(names(service.get("/targets?consumer=agency&subject=worker").await.1), vec!["agency/b"]);
   assert_eq!(names(service.get("/targets?subject=two%20words").await.1), Vec::<String>::new());
+  refused(&service.get("/targets?consumer=agency&consumer=receiver").await, 400, "invalid_name");
 }
 
 #[tokio::test]

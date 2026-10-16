@@ -129,7 +129,8 @@ Declares a group or changes its limit.
 | --- | --- | --- |
 | `limit` | int | how many of the group's targets one pass may ping, 0 or more |
 
-Answers 201 or 200 with `consumer`, `group` and `limit`. 404 `unknown_consumer`.
+Answers 201 or 200 with `consumer`, `group` and `limit`. 404 `unknown_consumer`; 400 `invalid_body`
+for a limit below 0.
 
 ### DELETE `/consumers/{consumer}/groups/{group}`
 
@@ -184,7 +185,7 @@ paused does not undo the pause. 204. 404 `unknown_target`.
 ### GET `/targets`
 
 Answers 200 with `targets`, every registered target, ordered by rank, then consumer, then target
-name. Query `consumer` and `subject` narrow it.
+name. Query `consumer` and `subject` narrow it; 400 `invalid_name` when the query does not read.
 
 Each entry:
 
@@ -261,7 +262,7 @@ override not above 0.
 ## The ping hook
 
 The one contract the warmer consumes. To warm a target, the warmer posts to its consumer's
-`hook_url`:
+`hook_url` directly, through no proxy, and follows no redirect:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -302,7 +303,7 @@ Refusals:
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `invalid_body` | 400 | the body is not JSON, misses a required field, or has a field of the wrong type |
-| `invalid_name` | 400 | a name in the path or the body is empty or longer than 256 bytes |
+| `invalid_name` | 400 | a name in the path or the body is empty or longer than 256 bytes, or the query naming them does not read |
 | `invalid_hook_url` | 400 | the hook URL does not parse or is not `http` |
 | `invalid_kind` | 400 | the kind is not snake_case |
 | `invalid_clock` | 400 | a duration is out of its range |
@@ -320,8 +321,8 @@ failed attempt of its own judging:
 | Code | Meaning |
 | --- | --- |
 | `hook_timeout` | the hook did not answer within its bound and the slack |
-| `hook_unreachable` | the hook URL could not be connected to |
-| `hook_status` | the hook answered a status other than 200 |
+| `hook_unreachable` | the hook URL could not be connected to, or the request broke off before an answer came |
+| `hook_status` | the hook answered a status other than 200, a redirect included |
 | `hook_answer` | the hook's body did not read as an answer, or a skipped answer carried no snake_case code, or a failed one no reason |
 
 ## Consumers and their targets

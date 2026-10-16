@@ -25,7 +25,8 @@ with them is `docs/warming.md`'s.
   only what it declares; the record stays, and a stated last use is taken only where it is later.
   Retiring a target removes its record and its attempts.
 - **Attempts:** the attempt log, one row per ping — consumer, target, time, outcome, code, reason.
-  An attempt stays for the policy's `log_days`; each pass, as it ends, removes what is older.
+  An attempt stays for the policy's `log_days`; each pass, as it ends, removes what is older, a pass
+  that found the round stopped included.
 - **The round:** one row, whether the owner has stopped the round. A new store starts with the round
   running.
 

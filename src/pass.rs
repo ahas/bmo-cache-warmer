@@ -139,11 +139,18 @@ impl From<Fault> for Heard {
 
 impl Warmer {
   pub fn new(store: Store, policy: Policy, clock: Arc<dyn Clock>) -> Self {
+    // A ping goes to the hook URL itself: no proxy from the environment, and a redirect is an answer.
+    let client = reqwest::Client::builder()
+      .no_proxy()
+      .redirect(reqwest::redirect::Policy::none())
+      .build()
+      .expect("a plain HTTP client builds");
+
     Self {
       store,
       policy,
       clock,
-      client: reqwest::Client::new(),
+      client,
       running: Mutex::new(()),
     }
   }
@@ -174,7 +181,18 @@ impl Warmer {
     self.run(idle_override_ms).await
   }
 
+  /// A pass, then the log pruned to its days, whether or not the pass found the round stopped.
   async fn run(&self, idle_override_ms: Option<i64>) -> Result<Report, StoreError> {
+    let report = self.ping_due(idle_override_ms).await?;
+
+    self
+      .store
+      .prune_attempts(self.clock.now().saturating_sub(self.policy.log_keep_ms()))
+      .await?;
+    Ok(report)
+  }
+
+  async fn ping_due(&self, idle_override_ms: Option<i64>) -> Result<Report, StoreError> {
     let mut report = Report::default();
     if self.store.round_stopped().await? {
       report.stopped = true;
@@ -215,11 +233,6 @@ impl Warmer {
         });
       }
     }
-
-    self
-      .store
-      .prune_attempts(self.clock.now().saturating_sub(self.policy.log_keep_ms()))
-      .await?;
     Ok(report)
   }
 

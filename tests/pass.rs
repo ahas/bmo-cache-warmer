@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{any, post};
 use axum::{Json, Router};
 use bmo_cache_warmer::pass::{PassError, Report, Warmer};
 use bmo_cache_warmer::policy::Policy;
@@ -28,6 +28,8 @@ enum Reply {
   Answer(Value),
   Status(u16),
   Body(&'static str),
+  /// Sends the ping on to a route that answers warmed.
+  Redirect,
   /// Says it has the ping, then answers warmed once released.
   Held {
     arrived: Arc<Notify>,
@@ -76,6 +78,7 @@ async fn hook(State(consumer): State<Arc<Consumer>>, Json(ping): Json<Value>) ->
     Reply::Answer(answer) => Json(answer).into_response(),
     Reply::Status(status) => StatusCode::from_u16(status).expect("a status").into_response(),
     Reply::Body(body) => body.into_response(),
+    Reply::Redirect => (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, "/warm")]).into_response(),
     Reply::Held { arrived, release } => {
       arrived.notify_one();
       release.notified().await;
@@ -105,7 +108,10 @@ async fn bench() -> Bench {
 
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
   let hook_url = format!("http://{}/ping", listener.local_addr().expect("the port's address"));
-  let app = Router::new().route("/ping", post(hook)).with_state(consumer.clone());
+  let app = Router::new()
+    .route("/ping", post(hook))
+    .route("/warm", any(|| async { Json(json!({ "outcome": "warmed" })) }))
+    .with_state(consumer.clone());
   tokio::spawn(async move { axum::serve(listener, app).await.expect("the fake consumer serves") });
   store.put_consumer("agency", &hook_url).await.expect("the consumer");
 
@@ -285,9 +291,10 @@ async fn a_failure_touches_only_where_registered() {
 #[tokio::test]
 async fn a_hook_that_answers_wrongly_is_recorded_as_failed_with_the_warmers_code() {
   let bench = bench().await;
-  let cases: [(&str, Reply, &str); 7] = [
+  let cases: [(&str, Reply, &str); 8] = [
     ("status", Reply::Status(500), "hook_status"),
     ("created", Reply::Status(201), "hook_status"),
+    ("redirected", Reply::Redirect, "hook_status"),
     ("garbage", Reply::Body("not an answer"), "hook_answer"),
     ("unknown", Reply::Answer(json!({ "outcome": "cooled" })), "hook_answer"),
     ("codeless", Reply::Answer(json!({ "outcome": "skipped" })), "hook_answer"),
@@ -461,6 +468,26 @@ async fn a_pass_ends_by_pruning_the_log_to_its_days() {
   bench.warmer_with(policy).pass(None).await.expect("a pass");
   let log = bench.store.attempts("agency", "line").await.expect("the log");
   assert_eq!(log.iter().map(|attempt| attempt.at).collect::<Vec<_>>(), vec![NOW]);
+}
+
+#[tokio::test]
+async fn a_pass_that_finds_the_round_stopped_still_prunes_the_log() {
+  let bench = bench().await;
+  bench.register("line", line("worker")).await;
+  let old = Attempt {
+    at: NOW - 2 * DAY,
+    outcome: Outcome::Busy,
+    code: None,
+    reason: None,
+  };
+  bench.store.record_attempt("agency", "line", &old).await.expect("an old attempt");
+  bench.store.set_round_stopped(true).await.expect("the round stops");
+  let mut policy = Policy::builtin().expect("the built-in policy");
+  policy.log_days = 1;
+
+  let report = bench.warmer_with(policy).pass(None).await.expect("a pass");
+  assert!(report.stopped);
+  assert!(bench.store.attempts("agency", "line").await.expect("the log").is_empty());
 }
 
 #[tokio::test]
