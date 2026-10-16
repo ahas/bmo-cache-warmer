@@ -3,4 +3,5 @@
 //! targets are due, holds the owner's switches and keeps the record of every ping (`docs/api.md`,
 //! `docs/warming.md`).
 
+pub mod due;
 pub mod policy;

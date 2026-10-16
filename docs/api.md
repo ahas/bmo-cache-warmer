@@ -13,10 +13,9 @@ owner's switches and keeps the record of every ping.
 ## Versioning
 
 The version is the package's in `Cargo.toml` (semver), starting at 0.1.0; `VERSION` at the root holds
-the same. This document changes in the same
-commit as the boundary it states. A change to a contract an existing consumer reads — a route, a
-field, its type or meaning, a code — moves the major version; an addition no existing consumer reads
-moves the minor; anything else moves the patch.
+the same. This document changes in the same commit as the boundary it states. A change to a contract
+an existing consumer reads — a route, a field, its type or meaning, a code — moves the major version;
+an addition no existing consumer reads moves the minor; anything else moves the patch.
 
 ## Counterparts
 
@@ -172,7 +171,7 @@ Each entry:
 | `last_used_at` | int? | the record's last use |
 | `last_warmed_at` | int? | when its last warmed answer arrived |
 | `last_attempt` | object? | `at`, `outcome`, `code?`, `reason?` of its last attempt |
-| `due_at` | int? | when it is next due by its own clocks; null when it is off, paused, or past its lifetime until it is used again |
+| `due_at` | int? | when it is next due by its own clocks; the moment of the list when it was never touched; null when it is off, paused, past its lifetime until it is used again, or when its lifetime less its margin leaves no room for its idle stretch |
 
 `due_at` reads the target alone: a group's limit and the round may still pass it over.
 

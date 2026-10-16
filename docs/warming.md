@@ -51,7 +51,8 @@ waiting for, and if that work never comes the ping is all that was spent.
 ## Groups
 
 - **Closest to cooling first.** Of a group's due targets, the pass pings those with the oldest touch
-  first, up to the group's limit. A group with a limit of 0 has nothing pinged.
+  first, up to the group's limit: a target never touched counts oldest of all, and targets of equal
+  touch keep their rank order. A group with a limit of 0 has nothing pinged.
 - **Where the group stands.** A group's targets go at the rank of the group's first target in rank
   order, together.
 - **One group each.** A target belongs to at most one group, so no prefix is pinged twice in a pass.
