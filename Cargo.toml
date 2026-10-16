@@ -1,0 +1,13 @@
+# The service as one package at the root: the library and the binary that serves it. The repository
+# checks and the service's tests live in `tests/`.
+[package]
+name = "bmo-cache-warmer"
+description = "A keepalive scheduler: keeps registered prompt-cache prefixes warm by asking their consumers to ping them."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+toml = { version = "0.8.23", default-features = false, features = ["parse"] }

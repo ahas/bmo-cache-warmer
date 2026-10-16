@@ -1,0 +1,13 @@
+# How the testbed tests and checks this repository, in the testbed's declaration format.
+testbed = 0
+name = "bmo-cache-warmer"
+
+[test]
+languages = ["cargo"]
+
+[check]
+quick = ["layout", "dependencies", "korean"]
+# No code file holds Korean, so the ledger allows none anywhere.
+korean_ledger = "korean-ledger.json"
+# The warmer calls no other unit and serves no screen, so no other repository is a dependency.
+base_libraries = []

@@ -12,7 +12,8 @@ owner's switches and keeps the record of every ping.
 
 ## Versioning
 
-The version is the one in `Cargo.toml` (semver), starting at 0.1.0. This document changes in the same
+The version is the package's in `Cargo.toml` (semver), starting at 0.1.0; `VERSION` at the root holds
+the same. This document changes in the same
 commit as the boundary it states. A change to a contract an existing consumer reads — a route, a
 field, its type or meaning, a code — moves the major version; an addition no existing consumer reads
 moves the minor; anything else moves the patch.
