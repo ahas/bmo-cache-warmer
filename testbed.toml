@@ -11,3 +11,14 @@ quick = ["layout", "dependencies", "korean"]
 korean_ledger = "korean-ledger.json"
 # The warmer calls no other unit and serves no screen, so no other repository is a dependency.
 base_libraries = []
+
+[build]
+binaries = ["bmo-cache-warmer"]
+
+# The service runs from its own deploy tree and keeps its store in its own data root
+# (docs/api.md, "The deployed service").
+[deploy]
+root = "~/.local/share/bmo-cache-warmer"
+data_root = "~/.local/share/bmo-cache-warmer/data"
+units = ["deploy/systemd/*.service"]
+health = "curl -fsS --max-time 5 http://127.0.0.1:9023/health"

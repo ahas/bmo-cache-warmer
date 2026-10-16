@@ -44,10 +44,23 @@ cannot be bound stops the service before it serves anything, with an English sen
 error and a non-zero exit. Once the store is open and the port bound, the routes are served and the
 ticker starts (`docs/warming.md`, 「The pass」).
 
+### The deployed service
+
+- **It listens on `127.0.0.1:9023`.** Consumers, the console and the command line reach it there; no
+  sibling repository declares the port.
+- **It runs as the user unit `bmo-cache-warmer.service`,** the repository's one service, from the
+  release binary in its deploy tree under `~/.local/share/bmo-cache-warmer`.
+- **Its store is `warmer.sqlite` in its own data root,** `~/.local/share/bmo-cache-warmer/data`, inside
+  no checkout and no release, so a release leaves it alone. The unit makes the folder where it is
+  missing. A deployment takes no backup of it.
+- **A deployment waits on `GET /health`** answering 200 before it watches the service stay up.
+
+The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these, and a test
+in `tests/` holds the three to the same address.
+
 ## Conventions
 
-- The service listens on the address it is started with, on loopback; the testbed declaration names
-  the deployed port.
+- The service listens on the address it is started with, on loopback.
 - Bodies are JSON with snake_case keys. Times are epoch milliseconds; durations are milliseconds and
   their names end in `_ms`. A field marked `?` may be absent or null. A body whose every field may be
   absent may itself be left out.

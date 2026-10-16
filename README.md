@@ -14,6 +14,7 @@ the record of every ping. It calls no other service.
 | `src/` | The service's package: the library and the binary that serves it |
 | `policy/` | The warmer's own fixed numbers, as a TOML file built into the binary |
 | `tests/` | The repository checks and the service's tests |
+| `deploy/` | The service's systemd user unit, which a deployment links from the deploy tree |
 | `docs/` | The canonical statements of what the service does |
 
 At the root stand the Cargo manifest, the version, `testbed.toml` with its Korean ledger,
