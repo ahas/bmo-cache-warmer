@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
@@ -16,10 +17,10 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.138"
 sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["macros", "rt", "sync", "time"] }
+tokio = { version = "1.53.2", features = ["macros", "net", "rt", "sync", "time"] }
 toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
-# The tests serve the router and a fake consumer on loopback.
+# The tests serve the router and a fake consumer on loopback, and drive the ticker on a paused clock.
 tempfile = "3.27.0"
-tokio = { version = "1.53.2", features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1.53.2", features = ["macros", "net", "rt", "sync", "test-util", "time"] }

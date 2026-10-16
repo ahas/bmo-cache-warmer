@@ -17,6 +17,8 @@ or the round ends its warming.
 - **Never beside itself.** One pass runs at a time. A tick that comes while a pass is still running is
   put off until it ends, and a tick missed that way is delayed rather than run twice to catch up. A
   pass asked for over `POST /pass` while one runs is refused.
+- **A failed pass is not the end.** A pass the store fails is written to standard error, and the next
+  tick comes as usual.
 - **The round first.** While the owner has stopped the round, a pass judges nothing and pings nothing.
 - **One target at a time, in rank order.** The pass walks targets by the rank each registration
   declares, lowest first, then by consumer and target name; the order is stable from pass to pass.

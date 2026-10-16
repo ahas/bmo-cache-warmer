@@ -29,6 +29,21 @@ Each contract names today's counterpart by role, not by its code.
 | Command line | bmo-cli | the same as the console, from a shell |
 | Supervisor | systemd, the testbed | `GET /health` |
 
+## Starting the service
+
+The supervisor starts the binary with two settings, each given as an argument or, where the argument
+is absent, in the environment. Neither has a default.
+
+| Argument | Environment | Meaning |
+| --- | --- | --- |
+| `--listen` | `CACHE_WARMER_LISTEN` | the IP address and port to listen on, on loopback |
+| `--store` | `CACHE_WARMER_STORE` | the path of the store's SQLite file (`docs/store.md`), created where missing |
+
+A setting missing or not read, an address not on loopback, a store that does not open or a port that
+cannot be bound stops the service before it serves anything, with an English sentence on standard
+error and a non-zero exit. Once the store is open and the port bound, the routes are served and the
+ticker starts (`docs/warming.md`, 「The pass」).
+
 ## Conventions
 
 - The service listens on the address it is started with, on loopback; the testbed declaration names

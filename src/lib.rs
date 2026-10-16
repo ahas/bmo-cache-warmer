@@ -10,4 +10,5 @@ pub mod pass;
 pub mod policy;
 pub mod routes;
 pub mod store;
+pub mod ticker;
 pub mod words;
