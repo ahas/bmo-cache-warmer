@@ -8,6 +8,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
@@ -19,7 +20,6 @@ tokio = { version = "1.53.2", features = ["macros", "rt", "sync", "time"] }
 toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
-# The pass's tests post to a fake consumer: an in-process server on loopback.
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+# The tests serve the router and a fake consumer on loopback.
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["macros", "net", "rt", "sync", "time"] }

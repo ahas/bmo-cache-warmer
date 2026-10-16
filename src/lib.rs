@@ -8,5 +8,6 @@ pub mod due;
 pub mod migration;
 pub mod pass;
 pub mod policy;
+pub mod routes;
 pub mod store;
 pub mod words;

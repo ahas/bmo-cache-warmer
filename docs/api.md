@@ -34,10 +34,11 @@ Each contract names today's counterpart by role, not by its code.
 - The service listens on the address it is started with, on loopback; the testbed declaration names
   the deployed port.
 - Bodies are JSON with snake_case keys. Times are epoch milliseconds; durations are milliseconds and
-  their names end in `_ms`. A field marked `?` may be absent or null.
-- A name in a path — a consumer, a target, a subject, a group — is any non-empty UTF-8 string of at
-  most 256 bytes, percent-encoded in the path. Names are compared byte for byte. A target, a subject
-  and a group belong to one consumer: the same name under two consumers is two things.
+  their names end in `_ms`. A field marked `?` may be absent or null. A body whose every field may be
+  absent may itself be left out.
+- A name — a consumer, a target, a subject, a group, in a path or in a body — is any non-empty UTF-8
+  string of at most 256 bytes, percent-encoded in a path. Names are compared byte for byte. A target,
+  a subject and a group belong to one consumer: the same name under two consumers is two things.
 - 200 answers with a body, 201 answers a create with a body, 204 answers with none.
 - A word in snake_case is lower-case ASCII letters, digits and underscores, beginning with a letter,
   at most 64 bytes.
@@ -154,8 +155,8 @@ paused does not undo the pause. 204. 404 `unknown_target`.
 
 ### GET `/targets`
 
-Every registered target, ordered by rank, then consumer, then target name. Query `consumer` and
-`subject` narrow it.
+Answers 200 with `targets`, every registered target, ordered by rank, then consumer, then target
+name. Query `consumer` and `subject` narrow it.
 
 Each entry:
 
@@ -179,8 +180,9 @@ Each entry:
 
 ### GET `/consumers/{consumer}/subjects`
 
-The consumer's subjects, by name: `subject`, `switch` (`on`, `off`, or null while unset),
-`paused_at?`, and `targets`, how many targets name it. 404 `unknown_consumer`.
+Answers 200 with `subjects`, the consumer's subjects by name, each with `subject`, `switch` (`on`,
+`off`, or null while unset), `paused_at?`, and `targets`, how many targets name it. 404
+`unknown_consumer`.
 
 ### PUT `/consumers/{consumer}/subjects/{subject}/switch`
 
@@ -272,7 +274,7 @@ Refusals:
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `invalid_body` | 400 | the body is not JSON, misses a required field, or has a field of the wrong type |
-| `invalid_name` | 400 | a name in the path is empty or longer than 256 bytes |
+| `invalid_name` | 400 | a name in the path or the body is empty or longer than 256 bytes |
 | `invalid_hook_url` | 400 | the hook URL does not parse or is not `http` |
 | `invalid_kind` | 400 | the kind is not snake_case |
 | `invalid_clock` | 400 | a duration is out of its range |
@@ -281,6 +283,7 @@ Refusals:
 | `unknown_group` | 404 or 409 | no group by that name: 404 retiring it, 409 when a target names it |
 | `group_in_use` | 409 | a target still names the group |
 | `pass_running` | 409 | a pass is already running |
+| `unknown_route` | 404 or 405 | no route serves the path, 404, or none serves it under the method, 405 |
 | `database` | 500 | the store could not be read or written |
 
 Outcomes recorded on an attempt: `warmed`, `busy`, `skipped`, `failed`. Codes the warmer writes on a
