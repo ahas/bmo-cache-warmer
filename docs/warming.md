@@ -93,6 +93,23 @@ waiting for, and if that work never comes the ping is all that was spent.
 - A registration may carry the last use the consumer already knows, so a target registered after its
   session has stood a while is judged from that session's last write rather than brought up at once.
 
+## The policy
+
+The warmer's own fixed numbers stand in `policy/warmer.toml`, built into the binary and read once as
+the service starts. A key the reader does not know, a missing key, or a clock of 0 refuses the file,
+naming what is wrong, so a misspelling never reads as a default.
+
+| Key | Value | Meaning |
+| --- | --- | --- |
+| `start_delay_seconds` | 30 | how long after the service starts the first pass waits |
+| `tick_seconds` | 60 | how often a pass comes round, above 0 |
+| `warm_by_default` | false | whether a target warms when neither its registration nor its subject's switch says |
+| `ping_slack_seconds` | 15 | added to a target's ping bound before the warmer gives up on the hook, for the hook's own transport and answer |
+| `reason_units` | 400 | the UTF-16 units a failed attempt's reason is cut to, above 0 |
+
+Every clock a target runs on — idle stretch, lifetime, margin, ping bound — is its registration's,
+never this file's.
+
 ## What the warmer leaves to the consumer
 
 Whether a provider is on, whether an account can answer, whether a turn is running, which line a ping

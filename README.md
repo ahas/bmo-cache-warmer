@@ -12,6 +12,7 @@ the record of every ping. It calls no other service.
 | Folder | Holds |
 |---|---|
 | `src/` | The service's package: the library and the binary that serves it |
+| `policy/` | The warmer's own fixed numbers, as a TOML file built into the binary |
 | `tests/` | The repository checks and the service's tests |
 | `docs/` | The canonical statements of what the service does |
 
@@ -23,7 +24,7 @@ At the root stand the Cargo manifest, the version, `testbed.toml` with its Korea
 | Document | States |
 |---|---|
 | `docs/api.md` | The boundary: the routes served, the ping hook a consumer answers, the codes, what each consumer registers, and how the keepalive contracts bmo reads are served |
-| `docs/warming.md` | The pass, when a target is due, groups, what each answer leaves behind, and the owner's switches |
+| `docs/warming.md` | The pass, when a target is due, groups, what each answer leaves behind, the owner's switches, and the policy |
 
 ## Version
 

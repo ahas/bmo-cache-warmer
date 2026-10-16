@@ -1,0 +1,20 @@
+# The warmer's own fixed numbers (docs/warming.md, "The policy"). Every clock a target runs on is its
+# registration's, never this file's.
+
+# How long after the service starts the first pass waits: a starting host has real work to do first,
+# and warming is upkeep. The wait and a target's idle stretch still land inside the caches it keeps.
+start_delay_seconds = 30
+
+# How often the pass comes round.
+tick_seconds = 60
+
+# Whether a target warms when neither its registration nor its subject's switch says. Off: nothing is
+# warmed that nobody asked for.
+warm_by_default = false
+
+# Added to a target's ping bound before the warmer gives up on the hook. The bound is how long the
+# consumer's ping may take; this covers the hook's own transport and answer around it.
+ping_slack_seconds = 15
+
+# How many UTF-16 units of a failed attempt's reason are kept, the way a script counts a string.
+reason_units = 400
