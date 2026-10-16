@@ -65,8 +65,8 @@ A consumer matches on `code`, never on `error`.
 - **A group** is a set of targets of which only so many are warmed in one pass (a pool reservation's
   places, limited to its seats). A target is in at most one group.
 - **The round** is the owner's one switch over every target at once.
-- **The record** of a target is its last use, its last warmed ping, and its last attempt with its
-  outcome.
+- **The record** of a target is its last use, its last warmed ping, its last failed attempt, and its
+  last attempt with its outcome.
 
 ## Served routes
 
@@ -86,10 +86,11 @@ Registers a consumer or moves its hook.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `hook_url` | string | an absolute `http` or `https` URL the warmer posts pings to |
+| `hook_url` | string | an absolute `http` URL the warmer posts pings to |
 
 Answers 201 on a new consumer, 200 on an existing one, with `consumer` and `hook_url`. 400
-`invalid_hook_url` when the URL does not parse or is not `http` or `https`.
+`invalid_hook_url` when the URL does not parse or is not `http`. Consumers are services on the same
+host, so the warmer speaks plain HTTP only.
 
 ### PUT `/consumers/{consumer}/groups/{group}`
 
@@ -170,6 +171,7 @@ Each entry:
 | `paused_at` | int? | when its subject was paused, while that stands |
 | `last_used_at` | int? | the record's last use |
 | `last_warmed_at` | int? | when its last warmed answer arrived |
+| `last_failed_at` | int? | when its last failed attempt ended, whatever came after it |
 | `last_attempt` | object? | `at`, `outcome`, `code?`, `reason?` of its last attempt |
 | `due_at` | int? | when it is next due by its own clocks; the moment of the list when it was never touched; null when it is off, paused, past its lifetime until it is used again, or when its lifetime less its margin leaves no room for its idle stretch |
 
@@ -220,8 +222,9 @@ Runs one pass now and answers once it ends.
 | --- | --- | --- |
 | `idle_override_ms` | int? | used instead of `idle_ms` for every target that honours it, above 0 |
 
-Answers 200 with `stopped`, whether the round was stopped so nothing was judged, and `attempts`, one
-entry per ping in the order they went: `consumer`, `target`, `outcome`, `code?`, `reason?`. 409
+Answers 200 with `stopped`, whether the pass found the round stopped, at its start or before one of
+its pings, so what remained was not pinged, and `attempts`, one entry per ping in the order they
+went: `consumer`, `target`, `outcome`, `code?`, `reason?`. 409
 `pass_running` while a pass, the ticker's or another caller's, is running; 400 `invalid_clock` for an
 override not above 0.
 
@@ -270,7 +273,7 @@ Refusals:
 | --- | --- | --- |
 | `invalid_body` | 400 | the body is not JSON, misses a required field, or has a field of the wrong type |
 | `invalid_name` | 400 | a name in the path is empty or longer than 256 bytes |
-| `invalid_hook_url` | 400 | the hook URL does not parse or is not `http` or `https` |
+| `invalid_hook_url` | 400 | the hook URL does not parse or is not `http` |
 | `invalid_kind` | 400 | the kind is not snake_case |
 | `invalid_clock` | 400 | a duration is out of its range |
 | `unknown_consumer` | 404 | no consumer by that name |

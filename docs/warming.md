@@ -23,7 +23,8 @@ or the round ends its warming.
   It waits for each ping's answer before the next.
 - **Checked again before each ping.** Just before it posts a ping, the pass reads the round, the
   target's subject switch and its pause again, so a switch thrown during a long pass holds from the
-  next ping on.
+  next ping on. A round found stopped ends the pass there. A target found off, paused or retired is
+  passed over, and no other target of its group takes its place in that pass.
 - **Bounded.** A ping is given the target's ping bound plus the policy's slack. A hook that has not
   answered by then is recorded failed, and the pass goes on.
 
@@ -60,7 +61,10 @@ waiting for, and if that work never comes the ping is all that was spent.
 ## What an answer leaves behind
 
 - **The last attempt** — its time, outcome, code and reason — is recorded for every ping, whatever it
-  answered.
+  answered, and goes into the attempt log (`docs/store.md`). An attempt's time is the moment its
+  answer arrived or the warmer gave up on the hook.
+- **The last failed attempt's time** is kept apart from the last attempt, so a skipped or busy answer
+  after a failure does not lose the failure's touch.
 - **Only a warmed answer restarts the clock.** Its arrival becomes the target's last warmed time, and
   so its touch.
 - **A busy answer** means work was running on the target, keeping the prefix warm itself. It moves
@@ -107,6 +111,7 @@ naming what is wrong, so a misspelling never reads as a default.
 | `warm_by_default` | false | whether a target warms when neither its registration nor its subject's switch says |
 | `ping_slack_seconds` | 15 | added to a target's ping bound before the warmer gives up on the hook, for the hook's own transport and answer |
 | `reason_units` | 400 | the UTF-16 units a failed attempt's reason is cut to, above 0 |
+| `log_days` | 14 | how many days an attempt stays in the attempt log, above 0 |
 
 Every clock a target runs on — idle stretch, lifetime, margin, ping bound — is its registration's,
 never this file's.

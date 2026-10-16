@@ -17,6 +17,7 @@ pub struct Policy {
   pub warm_by_default: bool,
   pub ping_slack_seconds: u64,
   pub reason_units: usize,
+  pub log_days: u64,
 }
 
 /// Why a policy text did not read.
@@ -38,15 +39,13 @@ impl Policy {
   /// refuses it.
   pub fn read(text: &str) -> Result<Self, PolicyError> {
     let policy: Self = toml::from_str(text)?;
-    if policy.tick_seconds == 0 {
-      return Err(PolicyError::Zero {
-        key: "tick_seconds",
-      });
-    }
-    if policy.reason_units == 0 {
-      return Err(PolicyError::Zero {
-        key: "reason_units",
-      });
+    let above_zero = [
+      ("tick_seconds", policy.tick_seconds),
+      ("reason_units", policy.reason_units as u64),
+      ("log_days", policy.log_days),
+    ];
+    if let Some(&(key, _)) = above_zero.iter().find(|(_, value)| *value == 0) {
+      return Err(PolicyError::Zero { key });
     }
     Ok(policy)
   }
@@ -61,5 +60,10 @@ impl Policy {
 
   pub fn ping_slack(&self) -> Duration {
     Duration::from_secs(self.ping_slack_seconds)
+  }
+
+  /// How long an attempt stays in the attempt log, in milliseconds.
+  pub fn log_keep_ms(&self) -> i64 {
+    i64::try_from(self.log_days).unwrap_or(i64::MAX).saturating_mul(24 * 60 * 60 * 1000)
   }
 }

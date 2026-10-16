@@ -18,3 +18,6 @@ ping_slack_seconds = 15
 
 # How many UTF-16 units of a failed attempt's reason are kept, the way a script counts a string.
 reason_units = 400
+
+# How many days an attempt stays in the attempt log; each pass, as it ends, removes what is older.
+log_days = 14
