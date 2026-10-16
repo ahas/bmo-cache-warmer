@@ -9,6 +9,7 @@ pub mod migration;
 pub mod pass;
 pub mod policy;
 pub mod routes;
+pub mod snapshot;
 pub mod store;
 pub mod ticker;
 pub mod words;

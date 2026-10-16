@@ -7,7 +7,7 @@ These rules hold every change to this repository.
 - `docs/` is the canonical statement of what the service does; the code is one realisation of it.
   Before changing code, read the document covering that area: `docs/api.md` for the routes, the ping
   hook and the codes, `docs/warming.md` for the pass and the due rule, `docs/store.md` for the
-  tables and their migrations.
+  tables, their migrations and the snapshot.
 - A change that would make a document wrong or incomplete repairs the document first, stating what is
   true now, and the code is written to match. A change to the boundary moves the version as
   `docs/api.md` says, in the same commit.

@@ -22,3 +22,27 @@ root = "~/.local/share/bmo-cache-warmer"
 data_root = "~/.local/share/bmo-cache-warmer/data"
 units = ["deploy/systemd/*.service"]
 health = "curl -fsS --max-time 5 http://127.0.0.1:9023/health"
+
+# A deployment backs the store up before anything changes (docs/api.md, "The deployed service"). The
+# live release binary writes a consistent copy and holds it to its manifest; before the first
+# deployment there is no release binary, and the backup then passes only while no store stands either.
+# The store and its journal files are left out of the raw pack, since the snapshot is their copy.
+[deploy.backup]
+dir = "~/.local/share/bmo-cache-warmer/backups"
+snapshot = '''
+if test -x ~/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer; then
+  exec ~/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer snapshot --store ~/.local/share/bmo-cache-warmer/data/warmer.sqlite
+elif test -e ~/.local/share/bmo-cache-warmer/data/warmer.sqlite; then
+  echo "The store stands, but no release binary stands to copy it." >&2
+  exit 1
+fi
+'''
+verify = '''
+if test -x ~/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer; then
+  exec ~/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer verify
+elif test -e "$BMO_BACKUP_SNAPSHOT_DIR/manifest.json"; then
+  echo "The snapshot holds a manifest, but no release binary stands to verify it." >&2
+  exit 1
+fi
+'''
+exclude = ["warmer.sqlite", "warmer.sqlite-journal", "warmer.sqlite-wal", "warmer.sqlite-shm"]

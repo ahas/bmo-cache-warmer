@@ -27,7 +27,7 @@ Each contract names today's counterpart by role, not by its code.
 | Room consumer | bmo-receiver | registers itself and the chat touch target, reports each turn of the chat agent's session, answers the ping hook |
 | Console | bmo-web | lists targets and subjects, throws the round, subject switch and pause |
 | Command line | bmo-cli | the same as the console, from a shell |
-| Supervisor | systemd, the testbed | `GET /health` |
+| Supervisor | systemd, the testbed | `GET /health`; the testbed's backup runs `snapshot` and `verify` |
 
 ## Starting the service
 
@@ -44,6 +44,27 @@ cannot be bound stops the service before it serves anything, with an English sen
 error and a non-zero exit. Once the store is open and the port bound, the routes are served and the
 ticker starts (`docs/warming.md`, 「The pass」).
 
+### Snapshot and verify
+
+The same binary takes and checks a snapshot of the store when it is started with a subcommand; with
+none, it is the service. What a snapshot holds and how it is judged is `docs/store.md`, 「The
+snapshot」. Each setting is given as an argument or, where the argument is absent, in the environment.
+
+| Subcommand | Argument | Environment | Meaning |
+| --- | --- | --- | --- |
+| `snapshot` | `--store` | `CACHE_WARMER_STORE` | the store's SQLite file to copy |
+| `snapshot` | `--into` | `BMO_BACKUP_SNAPSHOT_DIR` | the directory the copy and its manifest are written into, made where missing |
+| `verify` | `--from` | `BMO_BACKUP_SNAPSHOT_DIR` | the directory holding a snapshot to check |
+
+- **Each exits 0 when it has done what it says,** with one English sentence on standard output.
+- **Anything else exits non-zero** with an English sentence on standard error saying what failed: a
+  store that does not open or is not a migrated store, a directory already holding a snapshot, a
+  copy that cannot be written; for `verify`, a missing or unreadable manifest, a missing copy, or a
+  copy that does not hold to its manifest. A setting missing or not read is refused with the command
+  line's usage and exit code 2.
+- **Neither serves nor warms, and neither changes the store:** `snapshot` opens it without creating it
+  or moving its shape, and `verify` opens the copy read-only.
+
 ### The deployed service
 
 - **It listens on `127.0.0.1:9023`.** Consumers, the console and the command line reach it there; no
@@ -52,11 +73,19 @@ ticker starts (`docs/warming.md`, 「The pass」).
   release binary in its deploy tree under `~/.local/share/bmo-cache-warmer`.
 - **Its store is `warmer.sqlite` in its own data root,** `~/.local/share/bmo-cache-warmer/data`, inside
   no checkout and no release, so a release leaves it alone. The unit makes the folder where it is
-  missing. A deployment takes no backup of it.
+  missing.
+- **A deployment takes a backup before anything changes,** into
+  `~/.local/share/bmo-cache-warmer/backups`, outside the data root. The backup holds a consistent
+  snapshot of the store, taken by the live release binary's `snapshot` and held to its manifest by
+  that binary's `verify`, beside the rest of the data root packed as it stands. The store file and the
+  journal files SQLite keeps beside it are left out of that pack, since a copy read while the service
+  writes could be torn; the snapshot is the store's copy in the backup. A deployment that finds no
+  release binary, as the first does, takes no snapshot, and its backup passes only while no store
+  stands either. Putting a snapshot back is `docs/store.md`, 「Putting a snapshot back」.
 - **A deployment waits on `GET /health`** answering 200 before it watches the service stay up.
 
-The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these, and a test
-in `tests/` holds the three to the same address.
+The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these. Tests in
+`tests/` hold the three to the same address, and the backup to the unit's binary and store.
 
 ## Conventions
 

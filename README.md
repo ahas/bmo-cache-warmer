@@ -26,7 +26,7 @@ At the root stand the Cargo manifest, the version, `testbed.toml` with its Korea
 |---|---|
 | `docs/api.md` | The boundary: the routes served, the ping hook a consumer answers, the codes, what each consumer registers, and how the keepalive contracts bmo reads are served |
 | `docs/warming.md` | The pass, when a target is due, groups, what each answer leaves behind, the owner's switches, and the policy |
-| `docs/store.md` | What the store keeps, how its shape moves, and how long the attempt log stands |
+| `docs/store.md` | What the store keeps, how its shape moves, how long the attempt log stands, and how a snapshot of it is taken, checked and put back |
 
 ## Version
 

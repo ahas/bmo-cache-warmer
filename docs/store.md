@@ -1,6 +1,7 @@
 # The store
 
-What the warmer keeps between passes and restarts, and how that shape moves. The things named here —
+What the warmer keeps between passes and restarts, how that shape moves, and how a copy of it is
+taken, checked and put back. The things named here —
 consumers, targets, subjects, groups, the round, the record — are `docs/api.md`'s; what the pass does
 with them is `docs/warming.md`'s.
 
@@ -40,3 +41,38 @@ does not have.
   and recorded in the store, so a store opened by a newer service is brought up to it and one step
   can be undone.
 - **A released migration is never edited.** A change to the shape is a new migration after the last.
+
+## The snapshot
+
+A snapshot is a consistent copy of the store with a manifest beside it, taken and checked by the
+binary's `snapshot` and `verify` (`docs/api.md`, 「Snapshot and verify」). A deployment's backup
+carries one (`docs/api.md`, 「The deployed service」).
+
+- **How it is taken:** the store is opened through the service's own SQLite library, without creating
+  it or running a migration, and SQLite's `VACUUM INTO` writes the copy, `warmer.sqlite`, into the
+  snapshot directory. `VACUUM INTO` reads the store inside one read transaction, so the copy is the
+  store as one moment left it, while the service goes on serving; no `sqlite3` program is needed. A
+  directory that already holds a copy or a manifest is refused, and nothing is written into it.
+- **What the manifest holds:** `manifest.json`, written after the copy, from the copy: the latest
+  migration recorded in it, the row count of each of its tables by name, and the SHA-256 of the copy
+  file in hex.
+- **A store that does not stand** is not created: the manifest then says no store stood, and no copy
+  is written. A file that holds no migration record is not a store and is refused.
+- **How `verify` judges it:** the manifest must read; where it says no store stood, no copy may stand
+  either. Otherwise the copy must stand, hash to the manifest's SHA-256, pass SQLite's
+  `integrity_check` opened read-only, and record the same latest migration and the same tables with
+  the same row counts. The first thing that does not hold is named in the refusal.
+
+## Putting a snapshot back
+
+A snapshot is put back in place of the store, never merged into it:
+
+1. Take the snapshot directory out of the backup and run `verify` on it; a snapshot that does not
+   verify is not put back.
+2. Stop the service, so nothing holds the store open.
+3. Replace the store file with the snapshot's copy, and remove the journal files SQLite keeps beside
+   the store (`-journal`, `-wal`, `-shm`), which belong to the file replaced.
+4. Start the release whose migrations reach the manifest's latest migration, the one deployed when
+   the backup was taken or a newer one; a newer release moves the copy's shape up as it opens it. A
+   release older than the copy is not started on it, since its migrations cannot read a shape they
+   do not know.
