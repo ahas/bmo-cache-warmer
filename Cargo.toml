@@ -3,7 +3,7 @@
 [package]
 name = "bmo-cache-warmer"
 description = "A keepalive scheduler: keeps registered prompt-cache prefixes warm by asking their consumers to ping them."
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 publish = false
 

@@ -19,11 +19,11 @@ an addition no existing consumer reads moves the minor; anything else moves the 
 
 ## Counterparts
 
-Each contract names today's counterpart by role, not by its code.
+Each contract names today's counterpart by role, not by its code. Any service that registers and
+answers the ping hook is a consumer; the warmer needs nothing else of it.
 
 | Role | Today | Uses |
 | --- | --- | --- |
-| Session consumer | bmo-agency | registers itself and its targets (worker sessions, stand-in roads, launch lines, editors, gates, pool places), reports their use, answers the ping hook |
 | Room consumer | bmo-receiver | registers itself and the chat touch target, reports each turn of the chat agent's session, answers the ping hook |
 | Console | bmo-web | lists targets and subjects, throws the round, subject switch and pause |
 | Command line | bmo-cli | the same as the console, from a shell |
@@ -115,13 +115,13 @@ A consumer matches on `code`, never on `error`.
 
 - **A consumer** is a service that has targets warmed. It is known by its name and the hook URL the
   warmer posts to.
-- **A target** is one cache prefix the consumer wants kept warm: a worker's session, a launch line's
-  session, a pool place. The consumer names it and declares its clocks.
+- **A target** is one cache prefix the consumer wants kept warm: an agent's session, a prompt line
+  several runs share. The consumer names it and declares its clocks.
 - **A subject** is what the owner switches: an agent. Each target names its subject; several
-  targets may share one (a worker's sessions on several providers). A subject exists once a target
+  targets may share one (an agent's sessions on several providers). A subject exists once a target
   names it or the owner throws its switch.
-- **A group** is a set of targets of which only so many are warmed in one pass (a pool reservation's
-  places, limited to its seats). A target is in at most one group.
+- **A group** is a set of targets of which only so many are warmed in one pass (places that share a
+  limited number of seats). A target is in at most one group.
 - **The round** is the owner's one switch over every target at once.
 - **The record** of a target is its last use, its last warmed ping, its last failed attempt, and its
   last attempt with its outcome.
@@ -250,8 +250,8 @@ The owner's persistent switch for a subject.
 | --- | --- | --- |
 | `on` | bool? | true or false throws it; null returns every target of the subject to its registration's default |
 
-Answers 200 with the subject as listed. A subject not yet named by any target is created, so a
-worker can be turned on before its first session is registered. 404 `unknown_consumer`.
+Answers 200 with the subject as listed. A subject not yet named by any target is created, so an
+agent can be turned on before its first session is registered. 404 `unknown_consumer`.
 
 Turning a subject off leaves its targets' records where they stood; turning it back on judges them
 from those records.
@@ -356,43 +356,22 @@ failed attempt of its own judging:
 
 ## Consumers and their targets
 
-What each consumer registers, so every kind of prefix the keepalive pass keeps warm is kept warm on
-the same clocks. The consumer owns every value in this table; it reads them from its own policy and
-provider declarations and states them in each registration. Claude Code's declaration keeps a prefix
-60 minutes and pings after 40 idle; Codex's keeps GPT-5.6 and later 30 minutes and pings after 20;
-OpenRouter's states both per upstream, and a run on an upstream it does not list is not registered.
-A registered model of the owner's own declares no lifetime and is never registered. A native pool
-place names no prefix and is never registered.
+What each consumer registers today. The consumer owns every value in this table: it reads them from
+its own policy and its providers' declarations and states them in each registration, so a consumer
+that comes later adds its own rows and the warmer does not change.
 
 | Kind | Consumer | Subject | Clocks | Bound | Group | Default | Failure touches | Idle override |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Worker sessions, Claude | agency | the worker | idle 40 min, no lifetime: a held session is resumed as it stands | 120 s | none | off | yes | honoured |
-| Worker stand-in roads, Codex and OpenRouter | agency | the worker | the provider's idle and lifetime for the model or upstream | 120 s | none | off | no | honoured |
-| Gate stand-in roads | agency | the gate | the provider's idle and lifetime | 90 s | none | on | no | honoured |
-| Chat stand-in roads | agency | the chat agent | the provider's idle and lifetime | 90 s | none | on | no | honoured |
-| Launch lines | agency | the line's agent | idle 40 min, lifetime 60 min, margin 0 | 90 s | none | on | yes | honoured |
-| Editors | agency | the editor, one target per model and effort | idle 40 min, lifetime 60 min, margin 0 | 90 s | none | on | yes | honoured |
-| Gates: the output gate, the three reference gates, the situation-rules matcher | agency | the gate | idle 40 min, lifetime 60 min, margin 0 | 90 s | none | on | yes | honoured |
-| Pool places, co-work branch and research branch | agency | the reservation's owner | the provider's idle; its lifetime with a 5-minute margin | 120 s branch, 90 s research | the provider, model and effort the places share, its limit the seats of every reservation standing on it | on | no | not honoured |
 | Chat touch: the chat agent's one session, in the room it last stood in | receiver | the chat agent | idle 40 min, lifetime 60 min, margin 0 | 30 min | none | on | no | honoured |
 
-Ranks, so the pass keeps its order: pool places 10, worker stand-in roads 20, gate stand-in roads 30,
-chat stand-in roads 40, launch lines 50, editors 60, gates 70, worker sessions 80, chat touch 90.
+Ranks order the pass across every consumer's targets; the chat touch registers 90.
 
 What stays the consumer's, answered through the hook or through what it registers:
 
-- **Which workers warm.** A worker's sessions default off; the owner turns a worker on by its
-  subject's switch. Of a base worker's support workers agency registers only the first as many as the
-  support keepalive count says, by slot; the rest it never registers.
-- **A worker's default model.** A worker with no session on its default model registers that model's
-  target with no last use, so it is due at once and the ping brings the session up. A record on
-  another model that has expired is retired by agency and left for the next job.
-- **Which pool places are candidates.** Agency registers a place only while a reservation stands on
-  it and its prefix's fingerprint matches, restates the group's limit as seats change, and retires
-  places when reservations release. A place being written by a run answers `busy`.
-- **Providers and accounts.** A ping on a provider turned off, a Claude Code ping during a rest, or a
-  ping on an account that is closed or resting answers `skipped`; Codex and OpenRouter stand-ins warm
-  through a Claude Code rest. A provider's switch is agency's, not the warmer's.
+- **Which subjects warm by default.** A registration states its own default; the owner turns a
+  subject on or off by its switch.
+- **Providers and accounts.** A ping on a provider or an account the consumer will not use now
+  answers `skipped`. A provider's switch is the consumer's, not the warmer's.
 - **Locks.** The consumer takes whatever lock keeps a ping off a running turn, without waiting, and
   answers `busy` when it is held.
 - **The chat's state.** A chat touch while any room is in a conversation or a compaction answers
@@ -400,70 +379,12 @@ What stays the consumer's, answered through the hook or through what it register
   answers `skipped`.
 - **What a ping says and where it goes.** The keepalive prompt, the line it goes into and the login it
   goes out on are the consumer's.
-- **An expired record.** A stand-in run or session past its lifetime is never due; the consumer
-  forgets its own record and retires the target when it reads the record expired.
-
-## Switch-over
-
-Every contract on the keepalive pass that another part of bmo reads, and what serves it once the
-warmer runs.
-
-| Contract | Served by |
-| --- | --- |
-| `Keepalive::of`, the server's start of the pass | the warmer's own ticker |
-| `Keepalive::new`, the one-pass verb | `POST /pass` |
-| `ChatTouch::There`, the pass reaching the chat's conversations | the receiver's ping hook for its chat touch targets |
-| `TOUCH_PATH`, the chat's touch route | the receiver's ping hook |
-| `POST /conversation/touch` with `idleOverrideMs` | `POST /pass` with `idle_override_ms` |
-| `keepalive::logins` in the Claude login reader | agency's account watch |
-| `keepalive::logins` in the speech of a login's state | agency's account watch |
-| `keepalive::logins` in a job's Claude turn | agency's account watch |
-| `keepalive::logins` in the account walk | agency's account watch |
-| `pool::usable`, the lifetime less margin a pool place reads | agency, reading its own provider declaration; the warmer applies it as `margin_ms` |
-| `GET /keepalive`, answering `stopped` | `GET /round` |
-| `POST /keepalive` with `stopped` | `PUT /round` |
-| `POST /keepalive` with `agent` and `stopped` | `PUT /consumers/{consumer}/subjects/{subject}/switch` |
-| `POST /keepalive` with `agent` and `pause` | `POST /consumers/{consumer}/subjects/{subject}/pause` |
-| agents column `last_keepalive_at` | the target's record, `last_warmed_at` and `last_attempt` |
-| agents column `keepalive_stopped` | the subject's switch |
-| agents column `keepalive_paused_at` | the subject's `paused_at` |
-| agents column `support_count` | agency: the worker's slots |
-| agents column `support_keepalive` | agency: which support workers it registers |
-| agents column `support_of` | agency: the worker's slots |
-| agents column `support_slot` | agency: the worker's slots |
-| `KEEPALIVE`, the pass clocks | the warmer's policy, start delay and tick |
-| `KEEPALIVE`, the prompt and ping bounds, read by the chat touch | the receiver's own policy and its `ping_bound_ms` |
-| `KEEPALIVE`, read by the gates | agency's policy and its `ping_bound_ms` |
-| `KEEPALIVE`, read by the worker sessions | agency's policy and its `ping_bound_ms` |
-| `POOL_WARM`, the margin and the place bounds | agency's policy, stated as `margin_ms` and `ping_bound_ms` |
-| the `keepalive_stopped` setting | `GET /round` and `PUT /round` |
-| the `--pause-keepalive` verb | bmo-cli, calling `POST …/subjects/{subject}/pause` |
-| `KeepaliveView` and `KeepaliveChanged` in the console | bmo-web, reading `GET /round`, `GET /targets` and the subject routes |
-| `workers::pause_keepalive` | `POST …/subjects/{subject}/pause` |
-
-The `keepalive_stopped` setting is read in three places — the pass, the run list and the console's
-switch — and all three read `GET /round`. `KEEPALIVE` is read in four: the pass, the chat touch, the
-gates and the worker sessions; each reader is one row above.
-
-## Contract gaps
-
-Statements in sibling documents the warmer makes untrue, each for its owner to restate:
-
-- **bmo-agency's documents** describe the keepalive pass as agency's server's own, and its login watch
-  as running on that pass. The pass is the warmer's; the login watch stays agency's and runs on a
-  clock of agency's own.
-- **bmo-agency's worker switch, pause columns and verbs** — the row switch, `--keepalive off` and
-  `--pause-keepalive` — write agency's agents row. They move onto the warmer's subject routes, and
-  agency registers its targets and answers the hook.
-- **bmo-agency's worker slots** state a base worker's keepalive is on unless the owner turns it off;
-  a worker's sessions warm by default off, and the owner turns them on by the switch.
-- **bmo-agency's `keepalive.toml`** holds the pass's start delay and tick; those are the warmer's,
-  and agency keeps only the prompt and its ping bounds.
-- **bmo-receiver** has no boundary document yet; its rooms' chat touch is a consumer of this one.
+- **An expired record.** A target past its lifetime is never due; the consumer forgets its own
+  record and retires the target when it reads the record expired.
 
 ## What is deliberately not here
 
-- **Logins.** Walking, watching and warming Claude Code accounts is agency's.
+- **Logins.** Walking, watching and warming a provider's accounts is the consumer's.
 - **Cache lifetimes and alerts.** What a provider publishes is the consumer's declaration; watching
   cache reads and alerting on them is cache-siren's.
 - **Wording.** Every line a person reads about a target is the console's language pack; the warmer

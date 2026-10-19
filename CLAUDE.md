@@ -16,6 +16,13 @@ These rules hold every change to this repository.
 
 ## Boundaries
 
+- **It runs on its own.** Building, running and testing the warmer needs no context from another
+  repository: no checkout beside it, and no document, policy file or setting of another service.
+- **Only documented APIs.** The warmer meets another service only through a contract that service's
+  documents state, and offers others only what `docs/api.md` states.
+- **References run one way.** A consumer depends on the warmer, never the warmer on a consumer. A
+  policy value several services share is owned by the lowest of them, and each repository holds only
+  what it uses.
 - **The warmer calls no other unit.** Consumers register with it and answer its ping hook; it knows no
   provider, model, account or service of theirs. Anything that differs per consumer or per kind of
   target is stated in the consumer's registration, never in a table here.

@@ -74,8 +74,8 @@ waiting for, and if that work never comes the ping is all that was spent.
 - **A skipped answer** moves nothing else; the target is judged again next pass.
 - **A failed answer** moves nothing else, unless the target registered `failure_touches`. Then the
   attempt counts as a touch: the target is not asked again until its idle stretch has passed since,
-  and its lifetime is measured from it. Launch lines, editors, gates and worker sessions hold their
-  records that way; pool places are asked again on the next pass.
+  and its lifetime is measured from it. A target that did not register it is asked again on the next
+  pass.
 - **The reason** a failed answer gives, or the warmer's own when the hook failed, is cut to the
   policy's length of UTF-16 units, the way a script counts a string; a surrogate pair the cut splits
   ends as the replacement character.
