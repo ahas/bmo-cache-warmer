@@ -7,8 +7,8 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use bmo_cache_warmer::clock::Clock;
-use bmo_cache_warmer::due::Clocks;
 use bmo_cache_warmer::store::{Registration, Store};
+use cache_warmer::Clocks;
 use tempfile::TempDir;
 
 pub const MINUTE: i64 = 60_000;

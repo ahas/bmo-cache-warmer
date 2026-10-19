@@ -4,7 +4,6 @@
 //! `docs/warming.md`, `docs/store.md`).
 
 pub mod clock;
-pub mod due;
 pub mod migration;
 pub mod pass;
 pub mod policy;

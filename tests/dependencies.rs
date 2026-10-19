@@ -1,5 +1,6 @@
-//! Dependencies: no path out of the repository, and no other unit's crate at all. The warmer calls no
-//! other unit and serves no screen, so not even the base libraries are allowed.
+//! Dependencies: no path out of the repository, no other unit's crate, and nothing by git but bmo-agency's
+//! keepalive schedule library held to one commit. The warmer calls no other unit and serves no screen, so
+//! not even the base libraries are allowed.
 
 mod support;
 
@@ -11,6 +12,9 @@ use toml::{Table, Value};
 
 /// The crates of other units this repository may depend on: none.
 const BASE_LIBRARIES: [&str; 0] = [];
+
+/// The one crate taken from another repository: the due rule and the plan, by git and held to a `rev`.
+const SCHEDULE_LIBRARY: &str = "cache-warmer";
 
 /// The dependency tables a manifest or a target section may carry.
 const DEPENDENCY_TABLES: [&str; 5] = [
@@ -72,6 +76,16 @@ fn violations(root: &Path, manifest_dir: &Path, manifest: &Table, shown_as: &str
       let detail = spec.as_table();
       let name = detail.and_then(|d| d.get("package")).and_then(Value::as_str).unwrap_or(key);
       let path = detail.and_then(|d| d.get("path")).and_then(Value::as_str);
+      let git = detail.and_then(|d| d.get("git")).and_then(Value::as_str);
+      match git {
+        Some(git) if name != SCHEDULE_LIBRARY => {
+          found.push(format!("{shown_as}: {key} comes from another repository through {git}"));
+        }
+        Some(_) if detail.is_none_or(|d| !d.contains_key("rev")) => {
+          found.push(format!("{shown_as}: {key} is not held to one commit"));
+        }
+        _ => {}
+      }
       match path {
         Some(path) if !lexical(&manifest_dir.join(path)).starts_with(root) => {
           found.push(format!("{shown_as}: {key} reaches outside the repository through {path}"));
@@ -110,6 +124,9 @@ fn a_manifest_breaking_the_rules_is_named() {
     serde = "1"
     bmo-chat = { version = "0.1" }
     bmo-agency = { git = "https://example.invalid/agency" }
+    elsewhere = { git = "https://example.invalid/elsewhere", rev = "abc" }
+    cache-warmer = { git = "https://example.invalid/agency", branch = "main" }
+    schedule = { package = "cache-warmer", git = "https://example.invalid/agency", rev = "abc" }
     renamed = { package = "bmo-receiver", version = "0.1" }
     inside = { path = "src/inside" }
     outside = { path = "../../elsewhere" }
@@ -128,10 +145,13 @@ fn a_manifest_breaking_the_rules_is_named() {
   assert_eq!(
     found,
     [
+      "sample: bmo-agency comes from another repository through https://example.invalid/agency",
       "sample: bmo-agency is another unit's crate (bmo-agency)",
       "sample: bmo-chat is another unit's crate (bmo-chat)",
       "sample: bmo-testbed is another unit's crate (bmo-testbed)",
       "sample: bmo-ui is another unit's crate (bmo-ui)",
+      "sample: cache-warmer is not held to one commit",
+      "sample: elsewhere comes from another repository through https://example.invalid/elsewhere",
       "sample: outside reaches outside the repository through ../../elsewhere",
       "sample: renamed is another unit's crate (bmo-receiver)",
     ]

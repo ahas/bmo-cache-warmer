@@ -4,11 +4,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use cache_warmer::Pass;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::clock::Clock;
-use crate::due::{self, Pass};
 use crate::policy::Policy;
 use crate::store::{Attempt, Outcome, Store, StoreError, Target};
 use crate::words::is_snake_case;
@@ -208,7 +208,7 @@ impl Warmer {
       stopped: false,
     };
 
-    for index in due::plan(&candidates, &pass) {
+    for index in cache_warmer::plan(&candidates, &pass) {
       let planned = &targets[index];
       if self.store.round_stopped().await? {
         report.stopped = true;
@@ -261,7 +261,7 @@ impl Warmer {
       at: self.clock.now(),
       outcome: heard.outcome,
       code: heard.code,
-      reason: heard.reason.map(|reason| due::first_units(&reason, self.policy.reason_units)),
+      reason: heard.reason.map(|reason| cache_warmer::first_units(&reason, self.policy.reason_units)),
     }
   }
 

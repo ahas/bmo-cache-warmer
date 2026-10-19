@@ -4,13 +4,13 @@
 
 use std::path::Path;
 
+use cache_warmer::{Candidate, Clocks, Group, Record};
 use sea_orm::{
   ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryResult, RuntimeErr,
   SqlxSqliteConnector, Statement, TransactionTrait, Value,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use crate::due::{self, Candidate, Clocks, Group, Record};
 use crate::migration::{Migrator, MigratorTrait};
 
 /// The store, open and migrated.
@@ -120,7 +120,7 @@ pub struct Subject {
 impl Target {
   /// Whether it warms, given the policy's default for a registration that says nothing.
   pub fn on(&self, policy_default: bool) -> bool {
-    due::is_on(self.switch, self.warm_by_default, policy_default)
+    cache_warmer::is_on(self.switch, self.warm_by_default, policy_default)
   }
 
   /// The target as a pass judges it.

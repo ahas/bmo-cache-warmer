@@ -215,9 +215,10 @@ dependencies = [
 
 [[package]]
 name = "bmo-cache-warmer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
+ "cache-warmer",
  "clap",
  "reqwest",
  "sea-orm",
@@ -243,6 +244,11 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "cache-warmer"
+version = "1.1.0"
+source = "git+https://github.com/ahas/bmo-agency?rev=1fe08ba74525daf993e0e9e2dffc08682faa2d82#1fe08ba74525daf993e0e9e2dffc08682faa2d82"
 
 [[package]]
 name = "cc"

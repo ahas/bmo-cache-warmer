@@ -32,6 +32,12 @@ or the round ends its warming.
 
 ## When a target is due
 
+- **Judged by bmo-agency's keepalive schedule library.** The rule below and the order of 「Groups」 are
+  judged by the `cache-warmer` crate, which agency's own documents state as part of its boundary. The
+  warmer hands it each target's clocks, record, switch and pause, and the pass's moment, idle override
+  and round; the clock, the store, the policy, the ping and what its answer leaves behind stay the
+  warmer's.
+
 A target's **touch** is the later of its last use and its last warmed ping, and, where it registered
 `failure_touches`, its last failed attempt. Its **idle** is now less its touch. Its **idle stretch**
 is its `idle_ms`, or the pass's idle override where the pass has one and the target honours it.

@@ -17,7 +17,8 @@ These rules hold every change to this repository.
 ## Boundaries
 
 - **It runs on its own.** Building, running and testing the warmer needs no context from another
-  repository: no checkout beside it, and no document, policy file or setting of another service.
+  repository: no checkout beside it, and no document, policy file or setting of another service. The
+  one exception is the dependency below, which Cargo fetches by git from bmo-agency's repository.
 - **Only documented APIs.** The warmer meets another service only through a contract that service's
   documents state, and offers others only what `docs/api.md` states.
 - **References run one way.** A consumer depends on the warmer, never the warmer on a consumer. A
@@ -27,7 +28,10 @@ These rules hold every change to this repository.
   provider, model, account or service of theirs. Anything that differs per consumer or per kind of
   target is stated in the consumer's registration, never in a table here.
 - **Dependencies:** crates from the registry pinned in the manifest, and nothing from another
-  repository, the base libraries included. The dependency check in `tests/` holds this.
+  repository, the base libraries included, with one exception: the due rule and the plan are
+  bmo-agency's keepalive schedule library, the `cache-warmer` crate, taken by git and held to one
+  commit by `rev`. Moving it to a later commit is a change of its own here. The dependency check in
+  `tests/` holds this.
 - **No lookup table standing in for polymorphism.** A value that differs per member belongs to that
   member.
 - **No hand-written parser for a general format.** TOML, JSON, command lines and their kin are read by
