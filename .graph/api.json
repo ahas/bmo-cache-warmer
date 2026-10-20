@@ -1,0 +1,127 @@
+[
+  {
+    "id": "api/cli",
+    "title": "Command API",
+    "what": "The words of bmo-cache-warmer: the service's arguments, and the mcp, health, snapshot and verify steps with their exit codes, as docs/api.md states them and deploy/systemd runs them.",
+    "files": [
+      "docs/api.md",
+      "src/main.rs",
+      "deploy/systemd/bmo-cache-warmer.service"
+    ],
+    "symbols": [],
+    "aliases": [],
+    "needs": [
+      "service/binary",
+      "store/snapshot",
+      "api/mcp"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802625,
+    "boundary": {
+      "side": "exposes"
+    }
+  },
+  {
+    "id": "api/client",
+    "title": "Published client",
+    "what": "The client module the package publishes: one method for each route, the wire bodies, and a refusal as its status, code and sentence, for another unit that calls the warmer.",
+    "files": [
+      "docs/api.md",
+      "docs/openapi.json",
+      "src/client.rs"
+    ],
+    "symbols": [
+      "WarmerClient",
+      "ClientFailure",
+      "DEFAULT_ADDRESS"
+    ],
+    "aliases": [],
+    "needs": [
+      "service/client",
+      "api/http"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802620,
+    "boundary": {
+      "side": "exposes"
+    }
+  },
+  {
+    "id": "api/http",
+    "title": "HTTP API",
+    "what": "The warmer's boundary over HTTP: its routes and event stream, the bearer token, pages and refusal codes, and the target-ping hook it posts to, as docs/api.md and docs/openapi.json state them.",
+    "files": [
+      "docs/api.md",
+      "docs/openapi.json",
+      "src/routes/mod.rs",
+      "src/wire.rs"
+    ],
+    "symbols": [
+      "router"
+    ],
+    "aliases": [],
+    "needs": [
+      "service/http",
+      "service/wire",
+      "service/pass"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802618,
+    "boundary": {
+      "side": "exposes"
+    }
+  },
+  {
+    "id": "api/mcp",
+    "title": "Harness plugin API",
+    "what": "The bmo-cache-warmer plugin: the MCP server bmo-cache-warmer mcp starts, its six warmer tools and their answers, and the skill telling a harness when to use them.",
+    "files": [
+      "docs/api.md",
+      "src/mcp.rs",
+      "plugin/skills/bmo-cache-warmer/SKILL.md"
+    ],
+    "symbols": [
+      "tools",
+      "WarmerServer"
+    ],
+    "aliases": [],
+    "needs": [
+      "service/mcp",
+      "service/client"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802622,
+    "boundary": {
+      "side": "exposes"
+    }
+  },
+  {
+    "id": "api/schedule",
+    "title": "Schedule crate API",
+    "what": "The crate bmo-cache-warmer-schedule at schedule/: the due rule, the pass plan, the switches and the reason cut as plain values, with no dependency of any kind, which a consumer may take alone.",
+    "files": [
+      "docs/api.md",
+      "docs/warming.md",
+      "schedule/Cargo.toml",
+      "schedule/src/clocks.rs",
+      "schedule/src/plan.rs",
+      "schedule/src/reason.rs",
+      "schedule/src/switches.rs"
+    ],
+    "symbols": [
+      "Clocks",
+      "plan",
+      "is_on",
+      "usable"
+    ],
+    "aliases": [],
+    "needs": [
+      "schedule/rule"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802616,
+    "boundary": {
+      "side": "exposes"
+    }
+  }
+]

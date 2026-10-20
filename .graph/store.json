@@ -1,0 +1,74 @@
+[
+  {
+    "id": "store/migrations",
+    "title": "Store migrations",
+    "what": "The store's shape as ordered migrations with their way up and down, run before anything is served, and recorded so a store opened by a newer service is brought up to it.",
+    "files": [
+      "src/migration/mod.rs",
+      "src/migration/m20261017_000001_tables.rs",
+      "src/migration/m20261020_000002_ids.rs",
+      "docs/store.md"
+    ],
+    "symbols": [
+      "Migrator",
+      "Migration"
+    ],
+    "aliases": [],
+    "needs": [],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802586
+  },
+  {
+    "id": "store/snapshot",
+    "title": "Store snapshot",
+    "what": "A consistent copy of the store with a manifest beside it, taken by snapshot and held to its manifest by verify, for a deployment's backup before anything changes.",
+    "files": [
+      "src/snapshot.rs",
+      "docs/store.md",
+      "docs/api.md"
+    ],
+    "symbols": [
+      "take",
+      "verify",
+      "Manifest",
+      "Held",
+      "SnapshotError",
+      "COPY",
+      "MANIFEST"
+    ],
+    "aliases": [],
+    "needs": [
+      "store/store"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802611
+  },
+  {
+    "id": "store/store",
+    "title": "The store",
+    "what": "The one SQLite file keeping consumers, groups, subjects, targets and their records, the attempt log, the event window and the round, every write handed a time by its caller.",
+    "files": [
+      "src/store.rs",
+      "docs/store.md"
+    ],
+    "symbols": [
+      "Store",
+      "StoreError",
+      "Registration",
+      "Target",
+      "Subject",
+      "Round",
+      "Paging",
+      "Attempt",
+      "Outcome",
+      "StoredEvent"
+    ],
+    "aliases": [],
+    "needs": [
+      "store/migrations",
+      "schedule/rule"
+    ],
+    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "changed": 1792498802589
+  }
+]

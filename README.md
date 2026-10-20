@@ -13,6 +13,7 @@ with no dependency.
 
 | Folder | Holds |
 |---|---|
+| `.graph/` | The code dependency graph: one node per feature, the files it is made of, and the APIs the repository exposes |
 | `src/` | The service package: the service, its client, OpenAPI document and MCP server, and the binary |
 | `schedule/` | The schedule crate: the due rule and the plan, with its own tests |
 | `examples/` | The program that prints the OpenAPI document the repository keeps |
