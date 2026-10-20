@@ -17,21 +17,24 @@ These rules hold every change to this repository.
 ## Boundaries
 
 - **It runs on its own.** Building, running and testing the warmer needs no context from another
-  repository: no checkout beside it, and no document, policy file or setting of another service. The
-  one exception is the dependency below, which Cargo fetches by git from bmo-agency's repository.
+  repository: no checkout beside it, and no document, policy file or setting of another service.
 - **Only documented APIs.** The warmer meets another service only through a contract that service's
   documents state, and offers others only what `docs/api.md` states.
 - **References run one way.** A consumer depends on the warmer, never the warmer on a consumer. A
   policy value several services share is owned by the lowest of them, and each repository holds only
   what it uses.
-- **The warmer calls no other unit.** Consumers register with it and answer its ping hook; it knows no
-  provider, model, account or service of theirs. Anything that differs per consumer or per kind of
-  target is stated in the consumer's registration, never in a table here.
+- **The warmer calls no other unit.** Consumers register with it and answer its target-ping hook; it
+  knows no provider, model, account or service of theirs, and no name of a caller stands in its code or
+  documents. Anything that differs per consumer or per kind of target is stated in the consumer's
+  registration, never in a table here.
+- **It is an upstream.** A harness can take it as its first entry point through its MCP server, with no
+  other unit running; its API names nothing only one caller uses. It publishes its client and its
+  harness plugin from this repository, both built on the one OpenAPI document `docs/openapi.json`.
+- **The schedule rule is this repository's.** The due rule and the plan are the package's `schedule`
+  module, which uses nothing outside itself so that another repository may import it from here.
 - **Dependencies:** crates from the registry pinned in the manifest, and nothing from another
-  repository, the base libraries included, with one exception: the due rule and the plan are
-  bmo-agency's keepalive schedule library, the `cache-warmer` crate, taken by git and held to one
-  commit by `rev`. Moving it to a later commit is a change of its own here. The dependency check in
-  `tests/` holds this.
+  repository, the base libraries included: nothing by path out of the repository and nothing by git.
+  The dependency check in `tests/` holds this.
 - **No lookup table standing in for polymorphism.** A value that differs per member belongs to that
   member.
 - **No hand-written parser for a general format.** TOML, JSON, command lines and their kin are read by
@@ -42,7 +45,7 @@ These rules hold every change to this repository.
 - Everything in this repository is English: code, comments, strings, tests, documents, commit messages
   and branch names. No Korean in code or tests; the Hangul check in `tests/` and the testbed's
   `korean` check hold this.
-- What the service answers is an English sentence for a person, or a status and a snake_case code for
+- What the service answers is an English sentence for a person, or a status and a kebab-case code for
   a machine. Words a person reads in another language are the web console's language packs.
 - No personal data: no user names, home directories, machine names or names of any agent. Names the
   service needs at runtime come from its deployment's environment or arguments, never from the code.

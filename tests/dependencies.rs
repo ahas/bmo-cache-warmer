@@ -1,6 +1,5 @@
-//! Dependencies: no path out of the repository, no other unit's crate, and nothing by git but bmo-agency's
-//! keepalive schedule library held to one commit. The warmer calls no other unit and serves no screen, so
-//! not even the base libraries are allowed.
+//! Dependencies: no path out of the repository, no other unit's crate, and nothing by git. The warmer calls
+//! no other unit and serves no screen, so not even the base libraries are allowed.
 
 mod support;
 
@@ -12,9 +11,6 @@ use toml::{Table, Value};
 
 /// The crates of other units this repository may depend on: none.
 const BASE_LIBRARIES: [&str; 0] = [];
-
-/// The one crate taken from another repository: the due rule and the plan, by git and held to a `rev`.
-const SCHEDULE_LIBRARY: &str = "cache-warmer";
 
 /// The dependency tables a manifest or a target section may carry.
 const DEPENDENCY_TABLES: [&str; 5] = [
@@ -77,14 +73,8 @@ fn violations(root: &Path, manifest_dir: &Path, manifest: &Table, shown_as: &str
       let name = detail.and_then(|d| d.get("package")).and_then(Value::as_str).unwrap_or(key);
       let path = detail.and_then(|d| d.get("path")).and_then(Value::as_str);
       let git = detail.and_then(|d| d.get("git")).and_then(Value::as_str);
-      match git {
-        Some(git) if name != SCHEDULE_LIBRARY => {
-          found.push(format!("{shown_as}: {key} comes from another repository through {git}"));
-        }
-        Some(_) if detail.is_none_or(|d| !d.contains_key("rev")) => {
-          found.push(format!("{shown_as}: {key} is not held to one commit"));
-        }
-        _ => {}
+      if let Some(git) = git {
+        found.push(format!("{shown_as}: {key} comes from another repository through {git}"));
       }
       match path {
         Some(path) if !lexical(&manifest_dir.join(path)).starts_with(root) => {
@@ -150,10 +140,11 @@ fn a_manifest_breaking_the_rules_is_named() {
       "sample: bmo-chat is another unit's crate (bmo-chat)",
       "sample: bmo-testbed is another unit's crate (bmo-testbed)",
       "sample: bmo-ui is another unit's crate (bmo-ui)",
-      "sample: cache-warmer is not held to one commit",
+      "sample: cache-warmer comes from another repository through https://example.invalid/agency",
       "sample: elsewhere comes from another repository through https://example.invalid/elsewhere",
       "sample: outside reaches outside the repository through ../../elsewhere",
       "sample: renamed is another unit's crate (bmo-receiver)",
+      "sample: schedule comes from another repository through https://example.invalid/agency",
     ]
   );
 }

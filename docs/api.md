@@ -1,66 +1,397 @@
 # Boundary API
 
 Every interface by which cache-warmer meets anything outside its own process: the HTTP routes it
-serves and the one contract it consumes, the ping hook a consumer answers. Other services match
-against this document; the code is one realisation of it. How a pass runs and when a target is due
-is `docs/warming.md`.
+serves, the event stream, the target-ping hook a consumer serves, the client and the harness plugin
+it publishes, and the commands of its one binary. Other services match against this document and
+`docs/openapi.json`; the code is one realisation of them. How a pass runs and when a target is due
+is `docs/warming.md`; what the store keeps is `docs/store.md`.
 
 The warmer is a keepalive scheduler and nothing else. It knows no provider, no model, no account and
-no bmo service. A consumer tells it what to keep warm and on which clock, tells it each time a target
-is used, and answers when the warmer asks it to warm one; the warmer decides when to ask, holds the
-owner's switches and keeps the record of every ping.
+no caller. A consumer registers what to keep warm and on which clock, tells it each time a target is
+used, and serves the hook the warmer posts to when a target is due; the warmer decides when to ask,
+holds the switches and keeps the record of every ping. It calls no other service: the only calls it
+makes are pings to the URLs consumers registered.
 
 ## Versioning
 
-The version is the package's in `Cargo.toml` (semver); `VERSION` at the root holds the same. This
-document changes in the same commit as the boundary it states.
+The version is the package's in `Cargo.toml` (semver); `VERSION` at the root holds the same. The
+health route, the OpenAPI document and the MCP server all answer it. This document and
+`docs/openapi.json` change in the same commit as the boundary they state.
 
 - **Before the first release the version is `0.1.0` and counts revisions.** The first version, `0.1.0`,
   is the base. Every later version bump is one revision, written `0.1.0-rev.<n>` with `n` counting the
   bumps since the base from 1. Major, minor and patch do not move before the first release, whatever
   the change, a breaking one included.
 - **The first release drops the suffix,** and from then on the version moves by semver: a change to a
-  contract an existing consumer reads moves the major version, an addition the minor, anything else
+  contract an existing caller reads moves the major version, an addition the minor, anything else
   the patch.
 
-## Counterparts
+## The contract
 
-Each contract names today's counterpart by role, not by its code. Any service that registers and
-answers the ping hook is a consumer; the warmer needs nothing else of it.
+- **`docs/openapi.json` is the contract,** an OpenAPI 3.1 document written from the service's own
+  types. A test fails where the committed document differs from what the code writes; the example
+  `openapi` prints it again (`cargo run --example openapi`).
+- **Its `x-tools` are the MCP server's tools,** each naming the route it calls; `x-harness` names the
+  plugin, the command that starts its MCP server and what a harness does first with it; `x-events`
+  lists the event kinds; `webhooks` states the target-ping hook.
 
-| Role | Today | Uses |
+## Wire format
+
+- **Bodies are JSON with camelCase keys.** Times are one integer of epoch milliseconds and end in `At`;
+  spans are milliseconds and end in `Ms`; counts end in `Count`. A field marked `?` may be absent or
+  null.
+- **Every route takes the bearer token,** `/health` included: `Authorization: Bearer <token>`. A
+  request without it, or with another, is refused 401 `unauthorized`.
+- **A name** (a consumer, a target, a subject, a group) in a path or a body is a non-empty UTF-8 string
+  of at most 256 bytes, percent-encoded in a path, compared byte for byte. A target, a subject and a
+  group belong to one consumer: the same name under two consumers is two things.
+- **Each member also has an `id`,** a signed 64-bit integer the store gives it, which only grows. A
+  path names a member by its names; a list pages by the ids.
+- **A list is a page,** `{"items": [...], "more": boolean}`, in id order. `after` is the id of the last
+  item read, and the page starts past it; `limit` is 1 to 1000, 100 where absent. `more` says whether
+  anything stands past the last item.
+- **A kind word** is kebab-case: lower-case ASCII letters, digits and hyphens, beginning with a
+  letter, at most 64 bytes.
+- **A PATCH body is a JSON merge patch:** a field left out stays as it is, and a field given `null`
+  returns to its unset state.
+- **A refusal** is a status and a body of two keys: `code`, a kebab-case word listed under
+  「Codes」, and `error`, one English sentence saying what was wrong. A caller matches on `code`,
+  never on `error`.
+
+## The things it holds
+
+- **A consumer** is whatever has targets warmed: known by its name and the URL of its target-ping hook.
+- **A target** is one cache prefix the consumer wants kept warm. The consumer names it and declares its
+  clocks.
+- **A subject** is what a switch turns on and off. Each target names its subject, its own name where it
+  names none; several targets may share one. A subject exists once a target names it or a switch or
+  pause is set on it.
+- **A group** is a set of targets of which only so many are pinged in one pass. A target names the one
+  group it is in, if any.
+- **The round** is the one switch over every target at once, and the interval the pass comes round at.
+- **The record** of a target is its last use, its last warmed ping, its last failed attempt, and its
+  last attempt with its outcome.
+
+## Routes
+
+### GET `/health`
+
+Answers 200 with `ready` (bool, true once the store reads), `reason` (string, null when ready: why
+not) and `version`.
+
+### GET `/events`
+
+The service's one event stream (「Events」).
+
+### GET `/consumers`
+
+A page of consumers. Each:
+
+| Field | Type | Meaning |
 | --- | --- | --- |
-| Room consumer | bmo-receiver | registers itself and the chat touch target, reports each turn of the chat agent's session, answers the ping hook |
-| Console | bmo-web | lists targets and subjects, throws the round, subject switch and pause |
-| Command line | bmo-cli | the same as the console, from a shell |
-| Supervisor | systemd, the testbed | `GET /health`; the testbed's backup runs `snapshot` and `verify` |
+| `id` | int | |
+| `name` | string | |
+| `url` | string | the absolute `http` URL its target-ping hook is served at |
+| `createdAt` | int | when it was first registered |
 
-## Starting the service
+### PUT `/consumers/{consumerName}`
 
-The supervisor starts the binary with two settings, each given as an argument or, where the argument
-is absent, in the environment. Neither has a default.
+Registers a consumer or moves its hook. Body: `url`, an absolute `http` URL; consumers are services on
+the same host, so the warmer speaks plain HTTP only. Answers 201 with the consumer when it is new, 200
+when it stood. 422 `invalid-url` when the URL does not parse or is not `http`.
 
-| Argument | Environment | Meaning |
+### PUT `/consumers/{consumerName}/groups/{groupName}`
+
+Declares a group or changes its limit. Body: `limit`, how many of the group's targets one pass may
+ping, 0 or more. Answers 201 or 200 with the group:
+
+| Field | Type | Meaning |
 | --- | --- | --- |
-| `--listen` | `CACHE_WARMER_LISTEN` | the IP address and port to listen on, on loopback |
-| `--store` | `CACHE_WARMER_STORE` | the path of the store's SQLite file (`docs/store.md`), created where missing |
+| `id` | int | |
+| `consumerName`, `name` | string | |
+| `limit` | int | |
+| `targetNames` | string[] | the targets that name it, by name |
 
-A setting missing or not read, an address not on loopback, a store that does not open or a port that
-cannot be bound stops the service before it serves anything, with an English sentence on standard
-error and a non-zero exit. Once the store is open and the port bound, the routes are served and the
-ticker starts (`docs/warming.md`, 「The pass」).
+A target joins a group by naming it in its own registration; the group lists them. 404 `not-found`
+when the consumer is not registered.
 
-### Snapshot and verify
+### DELETE `/consumers/{consumerName}/groups/{groupName}`
 
-The same binary takes and checks a snapshot of the store when it is started with a subcommand; with
-none, it is the service. What a snapshot holds and how it is judged is `docs/store.md`, 「The
-snapshot」. Each setting is given as an argument or, where the argument is absent, in the environment.
+Retires a group. 204. 404 `not-found`; 409 `conflict` while a target names it.
 
-| Subcommand | Argument | Environment | Meaning |
+### GET `/targets`
+
+A page of every target. Query `consumerName` and `subjectName` narrow it. Each:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | int | |
+| `consumerName`, `name` | string | |
+| `kind?`, `label?` | string | as registered |
+| `subjectName` | string | as registered, or the target's own name |
+| `rank` | int | its place in the pass: lower goes first |
+| `groupName?` | string | as registered |
+| `ttlMs`, `idleMs`, `marginMs`, `pingBoundMs` | int | its clocks as registered, or as the policy filled them in |
+| `warmByDefault` | bool | as registered, or the policy's default |
+| `failureTouches`, `honoursIdleOverride` | bool | as registered |
+| `on` | bool | whether it warms now: its subject's switch where set, else `warmByDefault` |
+| `pausedUntil?` | int | when its subject's pause ends, while one stands |
+| `usedAt?` | int | the record's last use |
+| `warmedAt?` | int | when its last warmed answer arrived |
+| `failedAt?` | int | when its last failed attempt ended, whatever came after it |
+| `lastAttempt?` | object | `at`, `outcome`, `code?`, `reason?` of its last attempt |
+| `nextPingAt?` | int | when it is next due by its own clocks; the moment of the answer when it was never touched; null when it is off, paused, past its lifetime until it is used again, or when its lifetime less its margin leaves no room for its idle stretch |
+
+`nextPingAt` reads the target alone: a group's limit and the round may still pass it over.
+
+### PUT `/consumers/{consumerName}/targets/{targetName}`
+
+Registers a target or restates one. Restating changes what the registration declares and keeps the
+record and the subject's switches; the clocks the next judgement reads are the restated ones.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `ttlMs` | int | how long the provider keeps the prefix after its last touch, 0 or more |
+| `idleMs?` | int | how long it may stand idle before a ping is due, above 0; the policy's share of its usable lifetime when absent |
+| `marginMs?` | int | taken off `ttlMs` before judging, 0 or more; 0 when absent |
+| `pingBoundMs?` | int | how long the consumer may take to answer one ping, above 0; the policy's bound when absent |
+| `subjectName?` | string | the subject it is switched by; the target's own name when absent |
+| `groupName?` | string | the group it is in |
+| `rank?` | int | its place in the pass; 0 when absent |
+| `kind?` | string | the consumer's kind word for what this is; handed back in each ping |
+| `label?` | string | a line a screen shows; the consumer's wording |
+| `warmByDefault?` | bool | whether it warms while its subject's switch is unset; the policy's default when absent |
+| `failureTouches?` | bool | whether a failed attempt counts as a touch; false when absent |
+| `honoursIdleOverride?` | bool | whether a pass run with an idle override applies it here; true when absent |
+| `usedAt?` | int | when it was last used, where the consumer knows; taken only where later than the record's |
+
+Answers 201 on a new target, 200 on a restated one, with the target as listed. 404 `not-found` when
+the consumer is not registered; 422 `unknown-group` when `groupName` names no group of the consumer;
+422 `invalid-clock` when a clock is out of its range; 422 `invalid-kind` when `kind` is not a kind
+word. A lifetime no larger than its margin is accepted: such a target is never due.
+
+### DELETE `/consumers/{consumerName}/targets/{targetName}`
+
+Retires a target and its record. 204. 404 `not-found`. A subject left with no target keeps its
+switches.
+
+### POST `/consumers/{consumerName}/targets/{targetName}/uses`
+
+Records that the target's prefix was used. The body may be left out.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `at?` | int | when the prefix was last written; the moment the report arrives when absent |
+| `startedAt?` | int | when the work that used it began; `at` when absent |
+
+The record's last use moves to `at` where that is later than it. A pause on the target's subject set
+before `startedAt` is lifted; one set after it stands, so work already running when the pause was set
+does not undo it. Answers 201 with the use: `consumerName`, `targetName`, `at`, `startedAt`. 404
+`not-found`.
+
+### GET `/consumers/{consumerName}/subjects`
+
+A page of the consumer's subjects. Each:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | int | |
+| `consumerName`, `name` | string | |
+| `on?` | bool | its switch: true or false where set, null while unset |
+| `pausedAt?`, `pausedUntil?` | int | when its pause was set and when it ends, while one stands |
+| `targetCount` | int | how many targets name it |
+
+404 `not-found` when the consumer is not registered.
+
+### PATCH `/consumers/{consumerName}/subjects/{subjectName}`
+
+Throws a subject's switch or sets its pause, as a merge patch:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `on?` | bool | true or false throws the switch; null returns every target of the subject to its registration's default |
+| `pausedUntil?` | int | pauses the subject from now until then, moving a pause already standing; null lifts the pause |
+
+Answers 200 with the subject. A subject not yet named by any target is made, so a subject can be
+switched before its first target is registered. 404 `not-found` when the consumer is not registered;
+422 `invalid-clock` for a `pausedUntil` not after now.
+
+Turning a subject off leaves its targets' records where they stood; turning it back on judges them
+from those records.
+
+### GET `/round`
+
+Answers 200 with the round:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `intervalMs` | int | how often a pass comes round: the one set, or the policy's tick while none is |
+| `nextAt` | int | when the next pass of the ticker is due |
+| `running` | bool | false while every warming is stopped at once |
+
+### PATCH `/round`
+
+Changes the round, as a merge patch: `intervalMs?` (above 0; null returns it to the policy's tick)
+and `running?`. Answers 200 with the round. A new interval moves the next pass to the last pass's
+time plus the new interval, or now where that has passed. A pass already running sees `running`
+before its next ping. 422 `invalid-clock` for an interval not above 0.
+
+### POST `/passes`
+
+Runs one pass now and answers once it ends. The body may be left out: `idleOverrideMs?`, used instead
+of `idleMs` for every target that honours it, above 0. Answers 201 with the pass:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `at` | int | when it ended |
+| `pingedCount` | int | how many pings went |
+| `stopped` | bool | whether it found the round stopped, at its start or before one of its pings, so what remained was not pinged |
+| `attempts` | object[] | one per ping in the order they went: `consumerName`, `targetName`, `at`, `outcome`, `code?`, `reason?` |
+
+409 `conflict` while a pass, the ticker's or another caller's, is running; 422 `invalid-clock` for an
+override not above 0.
+
+## Events
+
+`GET /events` is the one stream, as server-sent events. Each event's SSE `event` is its kind, its
+`id` the event's number, and its `data` `{"id", "kind", "at", "data"}`, the inner `data` being the
+member as a route answers it.
+
+| Kind | When | `data` |
+| --- | --- | --- |
+| `target.changed` | a target is registered or restated, a use is recorded, a ping's attempt is recorded | the target |
+| `target.deleted` | a target is retired | its `id`, `consumerName` and `name` |
+| `subject.changed` | a subject's switch or pause is set, or a use lifts its pause | the subject |
+| `round.changed` | the round is changed | the round |
+| `pass.created` | a pass ends, the ticker's or one asked for | the pass |
+
+- **A reader resumes** with `Last-Event-ID` or `after`, the number of the last event read, and
+  narrows with `kinds`, a comma-separated list. The stream sends what stands past the cursor, then
+  each event as it is published, and a comment line every fifteen seconds. A reader that gives no
+  cursor reads from the start of the window.
+- **The window:** events are kept for the policy's `event_days`. A resume from before the window is
+  refused 410 `gone`, and the reader reads the collections again.
+- **A page:** a request asking `Accept: application/json` is answered a page of events past `after`,
+  by `limit`, for a caller that polls.
+
+## The target-ping hook
+
+The one contract the warmer consumes, stated under `webhooks` as `target-ping`. To warm a target, the
+warmer posts to its consumer's `url` directly, through no proxy, and follows no redirect:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `consumerName`, `targetName` | string | |
+| `subjectName` | string | as registered |
+| `kind?` | string | as registered |
+| `dueAt` | int | when the target fell due |
+| `boundMs` | int | the target's `pingBoundMs`: how long the consumer has to answer |
+
+The warmer waits `boundMs` plus the policy's slack. The consumer does the warming, puts the ping on
+the line the target's work runs on, and answers 204 when the prefix was read and written again, or
+200 with:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `outcome` | string | `warmed`, `busy`, `skipped` or `failed` |
+| `code?` | string | for `skipped`, required: a kind word saying why; for `failed`, optional |
+| `reason?` | string | for `failed`, required: an English sentence |
+
+- **`warmed`,** or 204: the prefix was read and written again. The record's last warmed time becomes
+  the moment the answer arrived; this is the only answer that restarts the target's clock.
+- **`busy`:** work was running on the target, which keeps the prefix warm itself, so no ping went.
+- **`skipped`:** the consumer chose not to ping now. The `code` is the consumer's own word; the warmer
+  stores it unread.
+- **`failed`:** a ping went and did not warm. The reason is cut to the policy's length, counted in
+  UTF-16 units.
+
+Busy and skipped answers move nothing but the last attempt. A failed one moves the target's touch
+only where it registered `failureTouches` (`docs/warming.md`).
+
+When the hook does not answer in time, cannot be reached, answers another status, or answers a body
+that does not read as above, the warmer records `failed` with one of these codes and an English
+reason of its own:
+
+| Code | Meaning |
+| --- | --- |
+| `hook-timeout` | the hook did not answer within its bound and the slack |
+| `hook-unreachable` | the hook URL could not be connected to, or the request broke off before an answer came |
+| `hook-status` | the hook answered a status other than 200 or 204, a redirect included |
+| `hook-answer` | the hook's body did not read as an answer, or a skipped answer carried no kind word as its code, or a failed one no reason |
+
+## Codes
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `bad-request` | 400 | the body, the query or a name in the path is not the shape the route takes |
+| `unauthorized` | 401 | the bearer token is missing or wrong |
+| `no-route` | 404 | no route answers this method and path |
+| `not-found` | 404 | nothing stands at the names the path gives |
+| `conflict` | 409 | a target still names the group, or a pass is already running |
+| `gone` | 410 | the events past the cursor asked for are no longer kept |
+| `invalid-url` | 422 | the hook URL does not parse or is not `http` |
+| `invalid-clock` | 422 | a span or a time is out of its range |
+| `invalid-kind` | 422 | the kind is not a kind word |
+| `unknown-group` | 422 | the registration names no group of the consumer |
+| `failed` | 500 | the store could not be read or written |
+
+## The client
+
+The module `client` of the package is the service's client: one method for each route, sending and
+reading the bodies `docs/openapi.json` states, a refusal read back as its status, code and sentence.
+It carries the contract and no caller's policy. It is built with the address and the token, and
+reaches the service through no proxy.
+
+## The harness plugin
+
+The plugin `bmo-cache-warmer`: the MCP server `bmo-cache-warmer mcp` starts on standard input and
+output, and the skill `plugin/skills/bmo-cache-warmer/SKILL.md`, which tells a harness when and how
+to use it.
+
+- **Its tools** are `warmer_consumers`, `warmer_targets`, `warmer_target_put`, `warmer_target_used`,
+  `warmer_subjects` and `warmer_round`, each a thin call of one route through the client. Each input
+  takes the route's path names, query and body as one object; each output is the route's answer.
+- **A refusal is a tool error** whose text is JSON: `status`, `code` and `error` as the service
+  answered them, `code` `bad-request` for arguments that are not the tool's shape, and `error` alone
+  where the service could not be reached.
+
+## The binary
+
+`bmo-cache-warmer` with no subcommand is the service. Each setting is given as an argument or, where
+the argument is absent, in the environment.
+
+| Command | Argument | Environment | Meaning |
 | --- | --- | --- | --- |
+| the service | `--listen` | `CACHE_WARMER_LISTEN` | the IP address and port to listen on, on loopback |
+| the service | `--store` | `CACHE_WARMER_STORE` | the path of the store's SQLite file (`docs/store.md`), created where missing |
+| the service | `--token-file` | `CACHE_WARMER_TOKEN_FILE` | the file holding the bearer token every route takes |
+| `mcp`, `health` | `--address` | `CACHE_WARMER_ADDRESS` | the service's address; `http://127.0.0.1:9023` when absent |
+| `mcp`, `health` | `--token` | `CACHE_WARMER_TOKEN` | the bearer token itself |
+| `mcp`, `health` | `--token-file` | `CACHE_WARMER_TOKEN_FILE` | the file holding the token, where no token is given |
 | `snapshot` | `--store` | `CACHE_WARMER_STORE` | the store's SQLite file to copy |
 | `snapshot` | `--into` | `BMO_BACKUP_SNAPSHOT_DIR` | the directory the copy and its manifest are written into, made where missing |
 | `verify` | `--from` | `BMO_BACKUP_SNAPSHOT_DIR` | the directory holding a snapshot to check |
+
+### The service
+
+None of its settings has a default. A setting missing or not read, an address not on loopback, a
+token file that does not read or holds nothing, a store that does not open or a port that cannot be
+bound stops the service before it serves anything, with an English sentence on standard error and a
+non-zero exit. Once the store is open and the port bound, the routes are served and the ticker starts
+(`docs/warming.md`, 「The pass」).
+
+### `mcp` and `health`
+
+- **`mcp`** serves the harness plugin's MCP server on standard input and output until its input ends.
+- **`health`** asks `GET /health` and exits 0 when the service answers ready, with one English sentence
+  on standard output; anything else exits 1 with a sentence on standard error saying what it found.
+- **Neither starts without a token:** neither `--token` nor `--token-file` given, or a token file that
+  does not read or holds nothing, is refused with the command line's usage or a sentence, and a
+  non-zero exit.
+
+### `snapshot` and `verify`
+
+What a snapshot holds and how it is judged is `docs/store.md`, 「The snapshot」.
 
 - **Each exits 0 when it has done what it says,** with one English sentence on standard output.
 - **Anything else exits non-zero** with an English sentence on standard error saying what failed: a
@@ -71,15 +402,17 @@ snapshot」. Each setting is given as an argument or, where the argument is abse
 - **Neither serves nor warms, and neither changes the store:** `snapshot` opens it without creating it
   or moving its shape, and `verify` opens the copy read-only.
 
-### The deployed service
+## The deployed service
 
-- **It listens on `127.0.0.1:9023`.** Consumers, the console and the command line reach it there; no
-  sibling repository declares the port.
+- **It listens on `127.0.0.1:9023`.** Callers reach it there; no sibling repository declares the port.
 - **It runs as the user unit `bmo-cache-warmer.service`,** the repository's one service, from the
-  release binary in its deploy tree under `~/.local/share/bmo-cache-warmer`.
+  release binary in its deploy tree under `~/.local/share/bmo-cache-warmer`. A deployment links the
+  binary into the folder holding `bmo`, so `bmo-cache-warmer mcp` starts by its name.
 - **Its store is `warmer.sqlite` in its own data root,** `~/.local/share/bmo-cache-warmer/data`, inside
   no checkout and no release, so a release leaves it alone. The unit makes the folder where it is
   missing.
+- **Its bearer token is the file `token` in the data root.** A deployment makes it once where none
+  stands and keeps it across deployments; a caller is given the same token through its own settings.
 - **A deployment takes a backup before anything changes,** into
   `~/.local/share/bmo-cache-warmer/backups`, outside the data root. The backup holds a consistent
   snapshot of the store, taken by the live release binary's `snapshot` and held to its manifest by
@@ -88,312 +421,28 @@ snapshot」. Each setting is given as an argument or, where the argument is abse
   writes could be torn; the snapshot is the store's copy in the backup. A deployment that finds no
   release binary, as the first does, takes no snapshot, and its backup passes only while no store
   stands either. Putting a snapshot back is `docs/store.md`, 「Putting a snapshot back」.
-- **A deployment waits on `GET /health`** answering 200 before it watches the service stay up.
+- **A deployment waits on the binary's `health`** answering ready before it watches the service stay
+  up. systemd supervises the unit.
 
 The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these. Tests in
-`tests/` hold the three to the same address, and the backup to the unit's binary and store.
+`tests/` hold the three to the same address and token file, and the backup to the unit's binary and
+store.
 
-## Conventions
+## What stays the consumer's
 
-- The service listens on the address it is started with, on loopback.
-- Bodies are JSON with snake_case keys. Times are epoch milliseconds; durations are milliseconds and
-  their names end in `_ms`. A field marked `?` may be absent or null. A body whose every field may be
-  absent may itself be left out.
-- A name — a consumer, a target, a subject, a group, in a path or in a body — is any non-empty UTF-8
-  string of at most 256 bytes, percent-encoded in a path. Names are compared byte for byte. A target,
-  a subject and a group belong to one consumer: the same name under two consumers is two things.
-- 200 answers with a body, 201 answers a create with a body, 204 answers with none.
-- A word in snake_case is lower-case ASCII letters, digits and underscores, beginning with a letter,
-  at most 64 bytes.
+Anything that differs per consumer or per kind of target is stated in the consumer's registration or
+answered through its hook, never held here:
 
-### A refused request
-
-A refusal is an HTTP status and a JSON body of exactly two fields:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `error` | string | one English sentence saying what was wrong |
-| `code` | string | a stable snake_case word, listed under 「Codes」 |
-
-A consumer matches on `code`, never on `error`.
-
-## The things it holds
-
-- **A consumer** is a service that has targets warmed. It is known by its name and the hook URL the
-  warmer posts to.
-- **A target** is one cache prefix the consumer wants kept warm: an agent's session, a prompt line
-  several runs share. The consumer names it and declares its clocks.
-- **A subject** is what the owner switches: an agent. Each target names its subject; several
-  targets may share one (an agent's sessions on several providers). A subject exists once a target
-  names it or the owner throws its switch.
-- **A group** is a set of targets of which only so many are warmed in one pass (places that share a
-  limited number of seats). A target is in at most one group.
-- **The round** is the owner's one switch over every target at once.
-- **The record** of a target is its last use, its last warmed ping, its last failed attempt, and its
-  last attempt with its outcome.
-
-## Served routes
-
-### GET `/health`
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `ok` | bool | true once the store is open |
-| `service` | string | `cache-warmer` |
-| `version` | string | the package version |
-
-500 `database` when the store cannot be read.
-
-### PUT `/consumers/{consumer}`
-
-Registers a consumer or moves its hook.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `hook_url` | string | an absolute `http` URL the warmer posts pings to |
-
-Answers 201 on a new consumer, 200 on an existing one, with `consumer` and `hook_url`. 400
-`invalid_hook_url` when the URL does not parse or is not `http`. Consumers are services on the same
-host, so the warmer speaks plain HTTP only.
-
-### PUT `/consumers/{consumer}/groups/{group}`
-
-Declares a group or changes its limit.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `limit` | int | how many of the group's targets one pass may ping, 0 or more |
-
-Answers 201 or 200 with `consumer`, `group` and `limit`. 404 `unknown_consumer`; 400 `invalid_body`
-for a limit below 0.
-
-### DELETE `/consumers/{consumer}/groups/{group}`
-
-Retires a group. 204. 404 `unknown_group`; 409 `group_in_use` while a target names it.
-
-### PUT `/consumers/{consumer}/targets/{target}`
-
-Registers a target or restates one. Restating changes what the registration declares and keeps the
-record and the subject's switches; the clocks the next judgement reads are the restated ones.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `kind` | string | the consumer's snake_case word for what this is; handed back in each ping and shown in the list |
-| `label` | string | a line the console shows; the consumer's wording |
-| `subject` | string? | the subject the owner switches it by; the target's own name when absent |
-| `rank` | int | its place in the pass: lower goes first |
-| `idle_ms` | int | how long it may stand idle before a ping is due, above 0 |
-| `lifetime_ms` | int? | how long the provider keeps the prefix after its last touch; none when no lifetime is declared |
-| `margin_ms` | int | taken off `lifetime_ms` before judging, 0 or more; 0 when absent |
-| `ping_bound_ms` | int | how long the consumer may take to answer one ping, above 0 |
-| `group` | string? | the group it is in |
-| `warm_by_default` | bool? | whether it warms while its subject's switch is unset; the policy's default, off, when absent |
-| `failure_touches` | bool | whether a failed attempt counts as a touch; false when absent |
-| `honours_idle_override` | bool | whether a pass run with an idle override applies it here; true when absent |
-| `last_used_at` | int? | when it was last used, where the consumer knows; taken only where later than the record's |
-
-Answers 201 on a new target, 200 on a restated one, with the target as `GET /targets` lists it. 404
-`unknown_consumer`; 409 `unknown_group` when `group` names no group of the consumer; 400
-`invalid_clock` when `idle_ms` or `ping_bound_ms` is not above 0, or `lifetime_ms` or `margin_ms` is
-below 0; 400 `invalid_kind` when `kind` is not snake_case.
-
-A lifetime no larger than its margin is accepted: such a target is never due.
-
-### DELETE `/consumers/{consumer}/targets/{target}`
-
-Retires a target and its record. 204. 404 `unknown_target`. A subject left with no target keeps its
-switches.
-
-### POST `/consumers/{consumer}/targets/{target}/used`
-
-Reports that the target's prefix was used.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `at` | int? | when the prefix was last written; the moment the report arrives when absent |
-| `started_at` | int? | when the work that used it began; `at` when absent |
-
-The record's last use moves to `at` where that is later than it. A pause on the target's subject set
-before `started_at` is cleared; one set after it stands, so work already running when the owner
-paused does not undo the pause. 204. 404 `unknown_target`.
-
-### GET `/targets`
-
-Answers 200 with `targets`, every registered target, ordered by rank, then consumer, then target
-name. Query `consumer` and `subject` narrow it; 400 `invalid_name` when the query does not read.
-
-Each entry:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `consumer` | string | |
-| `target` | string | |
-| `kind`, `label`, `subject`, `rank`, `group?` | | as registered |
-| `idle_ms`, `lifetime_ms?`, `margin_ms`, `ping_bound_ms` | int | as registered |
-| `warm_by_default` | bool | as registered, or the policy's default |
-| `failure_touches`, `honours_idle_override` | bool | as registered |
-| `on` | bool | whether it warms now: the subject's switch where set, else `warm_by_default` |
-| `paused_at` | int? | when its subject was paused, while that stands |
-| `last_used_at` | int? | the record's last use |
-| `last_warmed_at` | int? | when its last warmed answer arrived |
-| `last_failed_at` | int? | when its last failed attempt ended, whatever came after it |
-| `last_attempt` | object? | `at`, `outcome`, `code?`, `reason?` of its last attempt |
-| `due_at` | int? | when it is next due by its own clocks; the moment of the list when it was never touched; null when it is off, paused, past its lifetime until it is used again, or when its lifetime less its margin leaves no room for its idle stretch |
-
-`due_at` reads the target alone: a group's limit and the round may still pass it over.
-
-### GET `/consumers/{consumer}/subjects`
-
-Answers 200 with `subjects`, the consumer's subjects by name, each with `subject`, `switch` (`on`,
-`off`, or null while unset), `paused_at?`, and `targets`, how many targets name it. 404
-`unknown_consumer`.
-
-### PUT `/consumers/{consumer}/subjects/{subject}/switch`
-
-The owner's persistent switch for a subject.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `on` | bool? | true or false throws it; null returns every target of the subject to its registration's default |
-
-Answers 200 with the subject as listed. A subject not yet named by any target is created, so an
-agent can be turned on before its first session is registered. 404 `unknown_consumer`.
-
-Turning a subject off leaves its targets' records where they stood; turning it back on judges them
-from those records.
-
-### POST `/consumers/{consumer}/subjects/{subject}/pause`
-
-Turns the subject off until its next use: sets `paused_at` to now, and answers 200 with the subject
-as listed. Only a use report clears it (`POST …/used` above); it never changes the switch, which
-still wins while it is off. Pausing again moves `paused_at`. 404 `unknown_consumer`.
-
-### GET `/round`
-
-`stopped`, bool: whether the owner has stopped every warming at once.
-
-### PUT `/round`
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `stopped` | bool | true stops the round, false lets it run |
-
-Answers 200 with `stopped`. A pass already running sees it before its next ping.
-
-### POST `/pass`
-
-Runs one pass now and answers once it ends.
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `idle_override_ms` | int? | used instead of `idle_ms` for every target that honours it, above 0 |
-
-Answers 200 with `stopped`, whether the pass found the round stopped, at its start or before one of
-its pings, so what remained was not pinged, and `attempts`, one entry per ping in the order they
-went: `consumer`, `target`, `outcome`, `code?`, `reason?`. 409
-`pass_running` while a pass, the ticker's or another caller's, is running; 400 `invalid_clock` for an
-override not above 0.
-
-## The ping hook
-
-The one contract the warmer consumes. To warm a target, the warmer posts to its consumer's
-`hook_url` directly, through no proxy, and follows no redirect:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `consumer` | string | the consumer's name |
-| `target` | string | the target's name |
-| `kind` | string | as registered |
-| `subject` | string | as registered |
-| `bound_ms` | int | the target's `ping_bound_ms`: how long the consumer has to answer |
-
-The warmer waits `bound_ms` plus the policy's slack. The consumer does the warming — puts the ping on
-the line the target's work runs on — and answers 200 with:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `outcome` | string | `warmed`, `busy`, `skipped` or `failed` |
-| `code` | string? | for `skipped`, required: a snake_case word saying why; for `failed`, optional |
-| `reason` | string? | for `failed`, required: an English sentence |
-
-- **`warmed`:** the prefix was read and written again. The record's last warmed time becomes the
-  moment the answer arrived; this is the only answer that restarts the target's clock.
-- **`busy`:** work was running on the target, which keeps the prefix warm itself, so no ping went.
-- **`skipped`:** the consumer chose not to ping now — its provider is off, its account is resting or
-  closed, its record is gone. The `code` is the consumer's own word; the warmer stores it unread.
-- **`failed`:** a ping went and did not warm. The reason is cut to the policy's length, counted in
-  UTF-16 units.
-
-Busy and skipped answers move nothing but the last attempt. A failed one moves the target's touch
-only where it registered `failure_touches` (`docs/warming.md`).
-
-When the hook does not answer in time, cannot be reached, answers another status, or answers a body
-that does not read as above, the warmer records `failed` with the matching code below and an English
-reason of its own.
-
-## Codes
-
-Refusals:
-
-| Code | Status | Meaning |
-| --- | --- | --- |
-| `invalid_body` | 400 | the body is not JSON, misses a required field, or has a field of the wrong type |
-| `invalid_name` | 400 | a name in the path or the body is empty or longer than 256 bytes, or the query naming them does not read |
-| `invalid_hook_url` | 400 | the hook URL does not parse or is not `http` |
-| `invalid_kind` | 400 | the kind is not snake_case |
-| `invalid_clock` | 400 | a duration is out of its range |
-| `unknown_consumer` | 404 | no consumer by that name |
-| `unknown_target` | 404 | no target by that name under that consumer |
-| `unknown_group` | 404 or 409 | no group by that name: 404 retiring it, 409 when a target names it |
-| `group_in_use` | 409 | a target still names the group |
-| `pass_running` | 409 | a pass is already running |
-| `unknown_route` | 404 or 405 | no route serves the path, 404, or none serves it under the method, 405 |
-| `database` | 500 | the store could not be read or written |
-
-Outcomes recorded on an attempt: `warmed`, `busy`, `skipped`, `failed`. Codes the warmer writes on a
-failed attempt of its own judging:
-
-| Code | Meaning |
-| --- | --- |
-| `hook_timeout` | the hook did not answer within its bound and the slack |
-| `hook_unreachable` | the hook URL could not be connected to, or the request broke off before an answer came |
-| `hook_status` | the hook answered a status other than 200, a redirect included |
-| `hook_answer` | the hook's body did not read as an answer, or a skipped answer carried no snake_case code, or a failed one no reason |
-
-## Consumers and their targets
-
-What each consumer registers today. The consumer owns every value in this table: it reads them from
-its own policy and its providers' declarations and states them in each registration, so a consumer
-that comes later adds its own rows and the warmer does not change.
-
-| Kind | Consumer | Subject | Clocks | Bound | Group | Default | Failure touches | Idle override |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Chat touch: the chat agent's one session, in the room it last stood in | receiver | the chat agent | idle 40 min, lifetime 60 min, margin 0 | 30 min | none | on | no | honoured |
-
-Ranks order the pass across every consumer's targets; the chat touch registers 90.
-
-What stays the consumer's, answered through the hook or through what it registers:
-
-- **Which subjects warm by default.** A registration states its own default; the owner turns a
-  subject on or off by its switch.
+- **Which targets exist,** their clocks, their ranks, their groups and which warm by default.
 - **Providers and accounts.** A ping on a provider or an account the consumer will not use now
-  answers `skipped`. A provider's switch is the consumer's, not the warmer's.
-- **Locks.** The consumer takes whatever lock keeps a ping off a running turn, without waiting, and
-  answers `busy` when it is held.
-- **The chat's state.** A chat touch while any room is in a conversation or a compaction answers
-  `busy`; one while the chat agent keeps a session per room, or Claude Code is off, resting or down,
   answers `skipped`.
-- **What a ping says and where it goes.** The keepalive prompt, the line it goes into and the login it
-  goes out on are the consumer's.
-- **An expired record.** A target past its lifetime is never due; the consumer forgets its own
-  record and retires the target when it reads the record expired.
-
-## What is deliberately not here
-
-- **Logins.** Walking, watching and warming a provider's accounts is the consumer's.
+- **Locks.** The consumer takes whatever lock keeps a ping off running work, without waiting, and
+  answers `busy` when it is held.
+- **What a ping says and where it goes.** The prompt, the line it goes into and the login it goes out
+  on are the consumer's; the warmer only asks.
+- **An expired record.** A target past its lifetime is never due; the consumer forgets its own record
+  and retires the target when it reads the record expired.
+- **Wording.** Every line a person reads about a target is the reading screen's; the warmer holds only
+  the consumer's `label` and codes.
 - **Cache lifetimes and alerts.** What a provider publishes is the consumer's declaration; watching
-  cache reads and alerting on them is cache-siren's.
-- **Wording.** Every line a person reads about a target is the console's language pack; the warmer
-  holds only the consumer's `label` and codes.
-- **The ping itself.** What a ping says, which program it goes into and how its answer is read is the
-  consumer's; the warmer only asks.
+  cache reads is not the warmer's.

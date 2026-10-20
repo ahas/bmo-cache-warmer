@@ -7,22 +7,33 @@ use std::fs;
 use std::path::Path;
 
 use bmo_cache_warmer::snapshot::{self, COPY, MANIFEST, Manifest, SnapshotError};
-use bmo_cache_warmer::store::{Attempt, Outcome, Store};
+use bmo_cache_warmer::store::{Attempt, Outcome, Paging, Pause, RoundChange, Store, SubjectChange};
 use fixtures::{MINUTE, NOW, line, place, store};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, SqliteConnection};
 
-/// A store holding a consumer, a group, two targets with their use, a switch, a pause, attempts and a
-/// stopped round, left open as the service holds it.
+/// A store holding a consumer, a group, two targets with their use, a switch, a pause, attempts, an event
+/// and a stopped round with its interval, left open as the service holds it.
 async fn store_in_use() -> (tempfile::TempDir, Store) {
   let (dir, store) = store().await;
-  store.put_consumer("agency", "http://127.0.0.1:1/ping").await.unwrap();
-  store.put_group("agency", "pool", 2).await.unwrap();
-  store.put_target("agency", "line", &line("worker")).await.unwrap();
-  store.put_target("agency", "place", &place("seat", "pool")).await.unwrap();
-  store.report_use("agency", "line", NOW, NOW).await.unwrap();
-  store.set_switch("agency", "worker", Some(false)).await.unwrap();
-  store.pause("agency", "seat", NOW + MINUTE).await.unwrap();
+  store.put_consumer("alpha", "http://127.0.0.1:1/ping", NOW).await.unwrap();
+  store.put_group("alpha", "pool", 2).await.unwrap();
+  store.put_target("alpha", "line", &line("session")).await.unwrap();
+  store.put_target("alpha", "seat", &place("holder", "pool")).await.unwrap();
+  store.report_use("alpha", "line", NOW, NOW).await.unwrap();
+  let off = SubjectChange {
+    switch: Some(Some(false)),
+    ..SubjectChange::default()
+  };
+  store.change_subject("alpha", "session", off).await.unwrap();
+  let pause = SubjectChange {
+    pause: Some(Some(Pause {
+      at: NOW + MINUTE,
+      until: NOW + 60 * MINUTE,
+    })),
+    ..SubjectChange::default()
+  };
+  store.change_subject("alpha", "holder", pause).await.unwrap();
   for (at, outcome) in [(NOW, Outcome::Warmed), (NOW + MINUTE, Outcome::Failed)] {
     let attempt = Attempt {
       at,
@@ -30,11 +41,23 @@ async fn store_in_use() -> (tempfile::TempDir, Store) {
       code: None,
       reason: Some("a reason".into()),
     };
-    store.record_attempt("agency", "place", &attempt).await.unwrap();
+    store.record_attempt("alpha", "seat", &attempt).await.unwrap();
   }
-  store.set_round_stopped(true).await.unwrap();
+  store.append_event("round.changed", NOW, "{}").await.unwrap();
+  let stopped = RoundChange {
+    stopped: Some(true),
+    interval_ms: Some(Some(5_000)),
+  };
+  store.change_round(stopped).await.unwrap();
 
   (dir, store)
+}
+
+fn all() -> Paging {
+  Paging {
+    after: 0,
+    limit: 1000,
+  }
 }
 
 async fn taken() -> (tempfile::TempDir, tempfile::TempDir, Store) {
@@ -59,23 +82,39 @@ async fn a_snapshot_of_a_store_in_use_verifies_and_reopens_with_the_same_rows() 
 
   let written = manifest(snapshot.path());
   let held = written.store.as_ref().expect("the manifest holds the copy");
-  assert_eq!(held.migration, "m20261017_000001_tables");
-  for (table, rows) in [("consumers", 1), ("groups", 1), ("subjects", 2), ("targets", 2), ("attempts", 2)] {
+  assert_eq!(held.migration, "m20261020_000002_ids");
+  for (table, rows) in [
+    ("consumers", 1),
+    ("groups", 1),
+    ("subjects", 2),
+    ("targets", 2),
+    ("attempts", 2),
+    ("events", 1),
+  ] {
     assert_eq!(held.tables.get(table), Some(&rows), "{table}");
   }
   assert_eq!(snapshot::verify(snapshot.path()).await.unwrap(), written);
 
-  // The copy is reopened elsewhere, as it is put back, so the snapshot itself stays as taken.
+  // The copy is reopened elsewhere, as it is put back, so the snapshot itself stays as taken; the ids
+  // stand as they stood.
   let restored = tempfile::tempdir().unwrap();
   fs::copy(snapshot.path().join(COPY), restored.path().join("warmer.sqlite")).unwrap();
   let reopened = Store::open(&restored.path().join("warmer.sqlite")).await.unwrap();
-  assert_eq!(reopened.targets(None, None).await.unwrap(), store.targets(None, None).await.unwrap());
-  assert_eq!(reopened.subjects("agency").await.unwrap(), store.subjects("agency").await.unwrap());
   assert_eq!(
-    reopened.attempts("agency", "place").await.unwrap(),
-    store.attempts("agency", "place").await.unwrap()
+    reopened.targets(None, None, all()).await.unwrap(),
+    store.targets(None, None, all()).await.unwrap()
   );
-  assert!(reopened.round_stopped().await.unwrap());
+  assert_eq!(
+    reopened.subjects("alpha", all()).await.unwrap(),
+    store.subjects("alpha", all()).await.unwrap()
+  );
+  assert_eq!(reopened.consumers(all()).await.unwrap(), store.consumers(all()).await.unwrap());
+  assert_eq!(
+    reopened.attempts("alpha", "seat").await.unwrap(),
+    store.attempts("alpha", "seat").await.unwrap()
+  );
+  assert_eq!(reopened.events(0, &[], 10).await.unwrap(), store.events(0, &[], 10).await.unwrap());
+  assert_eq!(reopened.round().await.unwrap(), store.round().await.unwrap());
 }
 
 #[tokio::test]
@@ -83,7 +122,7 @@ async fn verify_refuses_a_changed_copy() {
   let (_dir, snapshot, _store) = taken().await;
   let options = SqliteConnectOptions::new().filename(snapshot.path().join(COPY));
   let mut copy = SqliteConnection::connect_with(&options).await.unwrap();
-  sqlx::query(r#"UPDATE "consumers" SET "hook_url" = 'http://127.0.0.1:2/ping'"#)
+  sqlx::query(r#"UPDATE "consumers" SET "url" = 'http://127.0.0.1:2/ping'"#)
     .execute(&mut copy)
     .await
     .unwrap();

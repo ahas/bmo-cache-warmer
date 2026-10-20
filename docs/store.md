@@ -15,11 +15,14 @@ with them is `docs/warming.md`'s.
 
 ## The tables
 
-- **Consumers:** each consumer's name and hook URL.
+- **Ids.** Each consumer, group, subject and target row has an integer id the store gives it as it
+  is made, which only grows and never moves, so a page read by ids reads the same across restarts
+  and across a snapshot put back. Restating a member keeps its id.
+- **Consumers:** each consumer's name, hook URL and the time it was first registered.
 - **Groups:** each group's consumer, name and limit. A group a target names is not retired.
-- **Subjects:** each subject's consumer, name, switch (on, off or unset) and the time its pause was
-  set, while that stands. A subject is made the first time a target names it or the owner throws its
-  switch or pauses it, and stays when its last target is retired, so its switch is kept.
+- **Subjects:** each subject's consumer, name, switch (on, off or unset) and its pause, as the time it
+  was set and the time it ends, while that stands. A subject is made the first time a target names it
+  or a switch or pause is set on it, and stays when its last target is retired, so its switch is kept.
 - **Targets:** what each registration declares — kind, label, subject, rank, clocks, group, default,
   failure touches, idle override — beside its record: last use, last warmed answer, last failed
   attempt, and the last attempt's time, outcome, code and reason. Restating a registration changes
@@ -28,8 +31,11 @@ with them is `docs/warming.md`'s.
 - **Attempts:** the attempt log, one row per ping — consumer, target, time, outcome, code, reason.
   An attempt stays for the policy's `log_days`; each pass, as it ends, removes what is older, a pass
   that found the round stopped included.
-- **The round:** one row, whether the owner has stopped the round. A new store starts with the round
-  running.
+- **Events:** the event window, one row per event — its number, kind, time and the member it carries
+  as JSON. Numbers only grow, including across events removed. An event stays for the policy's
+  `event_days`; each pass, as it ends, removes what is older.
+- **The round:** one row, whether the round is running and the interval set, none while the policy's
+  tick stands. A new store starts with the round running and no interval set.
 
 The store holds each table's own rules where the database can: a clock out of its range, a switch
 other than 0 or 1, an outcome not one of the four, a target naming a group or subject its consumer

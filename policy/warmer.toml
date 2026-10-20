@@ -1,16 +1,23 @@
-# The warmer's own fixed numbers (docs/warming.md, "The policy"). Every clock a target runs on is its
-# registration's, never this file's.
+# The warmer's own fixed numbers (docs/warming.md, "The policy"). A target's clocks are its registration's;
+# this file fills in only what a registration leaves out.
 
 # How long after the service starts the first pass waits: a starting host has real work to do first,
 # and warming is upkeep. The wait and a target's idle stretch still land inside the caches it keeps.
 start_delay_seconds = 30
 
-# How often the pass comes round.
+# How often the pass comes round while no interval is set on the round.
 tick_seconds = 60
 
 # Whether a target warms when neither its registration nor its subject's switch says. Off: nothing is
 # warmed that nobody asked for.
 warm_by_default = false
+
+# A registration's idle stretch where it states none, as this share of its lifetime less its margin: late
+# enough that a busy prefix is not pinged for nothing, early enough that a ping lands before it drops.
+idle_percent = 66
+
+# A registration's ping bound where it states none: how long its consumer may take to answer one ping.
+ping_bound_seconds = 120
 
 # Added to a target's ping bound before the warmer gives up on the hook. The bound is how long the
 # consumer's ping may take; this covers the hook's own transport and answer around it.
@@ -21,3 +28,6 @@ reason_units = 400
 
 # How many days an attempt stays in the attempt log; each pass, as it ends, removes what is older.
 log_days = 14
+
+# How many days an event stays in the event window; each pass, as it ends, removes what is older.
+event_days = 2

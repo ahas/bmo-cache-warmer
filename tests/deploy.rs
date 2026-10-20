@@ -1,14 +1,17 @@
 //! The deployed service (docs/api.md, "The deployed service"): the unit, the testbed declaration's
 //! `[deploy]` table and the boundary document name one address, and the unit runs the release binary
-//! from the declared deploy tree with its store in the declared data root. The backup a deployment
-//! takes copies that store with that binary, and leaves the live store out of the raw pack.
+//! from the declared deploy tree with its store in the declared data root and its token beside it, which
+//! the deployment makes once and asks the binary's health with. The backup a deployment takes copies that
+//! store with that binary, and leaves the live store out of the raw pack.
 
+mod fixtures;
 mod support;
 
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+use bmo_cache_warmer::routes::router;
 use bmo_cache_warmer::store::Store;
 use support::ROOT;
 use toml::Table;
@@ -49,7 +52,7 @@ fn the_unit_the_declaration_and_the_document_name_one_address() {
   );
   let health = key(&declaration, "deploy", "health");
   assert!(
-    health.contains(&format!("http://{ADDRESS}/health")),
+    health.contains(&format!(" health --address http://{ADDRESS} ")),
     "the health asks elsewhere: {health}"
   );
   assert!(
@@ -82,6 +85,88 @@ fn the_unit_runs_the_release_binary_with_its_store_in_the_data_root() {
     unit.contains("\nX-BMO-Deploy=bot\n"),
     "{UNIT} is not marked as the repository's service"
   );
+}
+
+#[test]
+fn the_unit_and_the_health_read_the_token_the_deployment_keeps_in_the_data_root() {
+  let declaration = declaration();
+  let data_root = key(&declaration, "deploy", "data_root");
+  let token = format!("{data_root}/token");
+  let root = key(&declaration, "deploy", "root");
+
+  assert!(
+    read(UNIT).contains(&format!("Environment=CACHE_WARMER_TOKEN_FILE={}\n", in_home(&token))),
+    "{UNIT} reads another token"
+  );
+  let health = key(&declaration, "deploy", "health");
+  assert!(
+    health.starts_with(&format!("{root}/deploy/bin/bmo-cache-warmer health "))
+      && health.ends_with(&format!(" --token-file {token}")),
+    "the health asks with another binary or token: {health}"
+  );
+}
+
+/// The command of the declared deploy step `id`.
+fn step(id: &str) -> String {
+  let declaration = declaration();
+  let steps = declaration["deploy"]["step"].as_array().expect("[[deploy.step]] is a list");
+  let step = steps
+    .iter()
+    .find(|step| step["id"].as_str() == Some(id))
+    .unwrap_or_else(|| panic!("a deploy step {id} stands"));
+
+  step["command"].as_str().expect("a step's command is a string").to_owned()
+}
+
+#[test]
+fn the_token_is_made_once_and_kept_across_deployments() {
+  let home = tempfile::tempdir().unwrap();
+  let token = home.path().join(".local/share/bmo-cache-warmer/data/token");
+  let make = || {
+    let ran = Command::new("sh")
+      .args(["-c", &step("make-token")])
+      .env("HOME", home.path())
+      .output()
+      .unwrap();
+    assert!(ran.status.success(), "{}", said(&ran));
+    fs::read_to_string(&token).unwrap()
+  };
+
+  let first = make();
+  assert_eq!(first.len(), 64, "{first}");
+  assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()), "{first}");
+  assert_eq!(make(), first);
+  let mode = std::os::unix::fs::PermissionsExt::mode(&fs::metadata(&token).unwrap().permissions());
+  assert_eq!(mode & 0o777, 0o600);
+}
+
+#[tokio::test]
+async fn the_binarys_health_ends_0_only_where_the_service_answers_ready_to_its_token() {
+  let (_dir, warmer, _clock) = fixtures::warmer().await;
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let address = format!("http://{}", listener.local_addr().unwrap());
+  tokio::spawn(async move { axum::serve(listener, router(warmer, "the-token")).await.unwrap() });
+  let tokens = tempfile::tempdir().unwrap();
+  let health = |token: &str| {
+    let file = tokens.path().join(token);
+    fs::write(&file, format!("{token}\n")).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bmo-cache-warmer"));
+    command
+      .args(["health", "--address", &address, "--token-file"])
+      .arg(file)
+      .env_remove("CACHE_WARMER_TOKEN");
+    tokio::task::spawn_blocking(move || command.output().unwrap())
+  };
+
+  let ready = health("the-token").await.unwrap();
+  assert_eq!(ready.status.code(), Some(0), "{}", said(&ready));
+  assert_eq!(
+    said(&ready),
+    format!("The service is ready, at version {}.\n", env!("CARGO_PKG_VERSION"))
+  );
+  let refused = health("another").await.unwrap();
+  assert_eq!(refused.status.code(), Some(1));
+  assert!(said(&refused).contains("401 unauthorized"), "{}", said(&refused));
 }
 
 #[test]
@@ -163,7 +248,7 @@ async fn the_declared_backup_runs_before_the_first_release_and_after_it() {
   // A store with no release binary to copy it fails the backup.
   fs::create_dir_all(&data_root).unwrap();
   let store = Store::open(&data_root.join("warmer.sqlite")).await.unwrap();
-  store.put_consumer("agency", "http://127.0.0.1:1/ping").await.unwrap();
+  store.put_consumer("tester", "http://127.0.0.1:1/ping", 0).await.unwrap();
   let ran = backup_command("snapshot", home.path(), &empty);
   assert!(!ran.status.success());
   assert_eq!(said(&ran), "The store stands, but no release binary stands to copy it.\n");

@@ -1,620 +1,655 @@
-//! The served routes (docs/api.md, "Served routes" and "Codes"), asked over HTTP on loopback, with a
-//! fake consumer whose hook answers warmed and a clock the test sets. The round, switch and pause tests
-//! carry the old control routes' keepalive checks: the round stopped and read back, a body that does not
-//! read refused, an agent's switch and a worker's pause.
+//! The served routes (docs/api.md, "Routes", "Events" and "Codes"), spoken to over loopback as any caller
+//! speaks to them: the token, the wire shape of each member, what each route refuses, and the events each
+//! change publishes. The pass and the store judge what is warmed; their own tests hold that.
 
 mod fixtures;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
+use axum::http::StatusCode as Status;
 use axum::routing::post;
-use bmo_cache_warmer::migration::{Migrator, MigratorTrait};
 use bmo_cache_warmer::pass::Warmer;
-use bmo_cache_warmer::policy::Policy;
 use bmo_cache_warmer::routes::router;
-use bmo_cache_warmer::store::Store;
-use fixtures::{IDLE, MINUTE, NOW, TestClock, store};
-use reqwest::Method;
+use fixtures::{MINUTE, NOW, TestClock, warmer};
+use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
 
-/// A ping held at the hook until the test releases it.
-#[derive(Clone)]
-struct Hold {
-  arrived: Arc<Notify>,
-  release: Arc<Notify>,
-}
+const TOKEN: &str = "a-test-token";
 
-/// The warmer served on loopback, the store and clock under it, and a consumer hook that answers warmed.
-struct Service {
+/// The service on a loopback port, its warmer and the clock it reads.
+struct Served {
   _dir: TempDir,
-  store: Store,
-  clock: Arc<TestClock>,
   base: String,
-  hook_url: String,
-  hold: Arc<Mutex<Option<Hold>>>,
-  client: reqwest::Client,
+  warmer: Arc<Warmer>,
+  clock: Arc<TestClock>,
+  http: reqwest::Client,
 }
 
-async fn serve(app: Router) -> String {
+async fn served() -> Served {
+  let (dir, warmer, clock) = warmer().await;
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
-  let address = listener.local_addr().expect("the port's address");
-  tokio::spawn(async move { axum::serve(listener, app).await.expect("the server serves") });
-  format!("http://{address}")
+  let base = format!("http://{}", listener.local_addr().expect("the port's address"));
+  let app = router(warmer.clone(), TOKEN);
+  tokio::spawn(async move { axum::serve(listener, app).await.expect("the service serves") });
+
+  Served {
+    _dir: dir,
+    base,
+    warmer,
+    clock,
+    http: reqwest::Client::builder().no_proxy().build().expect("a client"),
+  }
 }
 
-async fn service() -> Service {
-  let (dir, store) = store().await;
-  let clock = Arc::new(TestClock::at(NOW));
-  let warmer = Warmer::new(store.clone(), Policy::builtin().expect("the built-in policy"), clock.clone());
-  let base = serve(router(Arc::new(warmer))).await;
+impl Served {
+  /// One request with the token: its status and its body read as JSON, null where it has none.
+  async fn call(&self, method: Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let mut request = self.http.request(method, format!("{}{path}", self.base)).bearer_auth(TOKEN);
+    if let Some(body) = body {
+      request = request.json(&body);
+    }
+    let response = request.send().await.expect("the service answers");
+    let status = response.status();
+    let text = response.text().await.expect("a body");
 
-  let hold: Arc<Mutex<Option<Hold>>> = Arc::default();
-  let held = hold.clone();
+    (
+      status,
+      if text.is_empty() { Value::Null } else { serde_json::from_str(&text).expect("JSON") },
+    )
+  }
+
+  async fn get(&self, path: &str) -> (StatusCode, Value) {
+    self.call(Method::GET, path, None).await
+  }
+
+  async fn put(&self, path: &str, body: Value) -> (StatusCode, Value) {
+    self.call(Method::PUT, path, Some(body)).await
+  }
+
+  async fn consumer(&self, name: &str) {
+    let (status, _) = self
+      .put(&format!("/consumers/{name}"), json!({ "url": "http://127.0.0.1:1/ping" }))
+      .await;
+    assert!(status.is_success());
+  }
+
+  async fn target(&self, consumer: &str, name: &str, body: Value) -> Value {
+    let (status, target) = self.put(&format!("/consumers/{consumer}/targets/{name}"), body).await;
+    assert!(status.is_success(), "{status} {target}");
+    target
+  }
+
+  /// The kinds of the events kept, in order.
+  async fn kinds(&self) -> Vec<String> {
+    let events = self.warmer.store().events(0, &[], 1000).await.expect("the window").items;
+    events.into_iter().map(|event| event.kind).collect()
+  }
+}
+
+/// A refusal's status and code.
+fn refused(answer: (StatusCode, Value)) -> (u16, String) {
+  assert_eq!(answer.1.as_object().map(|body| body.len()), Some(2), "{}", answer.1);
+  assert!(answer.1["error"].as_str().is_some_and(|error| error.ends_with('.')), "{}", answer.1);
+  (answer.0.as_u16(), answer.1["code"].as_str().unwrap_or_default().to_owned())
+}
+
+fn code(status: u16, code: &str) -> (u16, String) {
+  (status, code.to_owned())
+}
+
+#[tokio::test]
+async fn every_route_takes_the_bearer_token_and_no_route_answers_the_rest() {
+  let served = served().await;
+  let routes = [
+    (Method::GET, "/health"),
+    (Method::GET, "/events"),
+    (Method::GET, "/consumers"),
+    (Method::PUT, "/consumers/a"),
+    (Method::PUT, "/consumers/a/groups/g"),
+    (Method::DELETE, "/consumers/a/groups/g"),
+    (Method::GET, "/targets"),
+    (Method::PUT, "/consumers/a/targets/t"),
+    (Method::DELETE, "/consumers/a/targets/t"),
+    (Method::POST, "/consumers/a/targets/t/uses"),
+    (Method::GET, "/consumers/a/subjects"),
+    (Method::PATCH, "/consumers/a/subjects/s"),
+    (Method::GET, "/round"),
+    (Method::PATCH, "/round"),
+    (Method::POST, "/passes"),
+  ];
+  for (method, path) in routes {
+    let url = format!("{}{path}", served.base);
+    let bare = served.http.request(method.clone(), &url).send().await.unwrap();
+    assert_eq!(bare.status(), StatusCode::UNAUTHORIZED, "{method} {path}");
+    let wrong = served.http.request(method.clone(), &url).bearer_auth("another").send().await.unwrap();
+    let body: Value = wrong.json().await.unwrap();
+    assert_eq!(body["code"], "unauthorized", "{method} {path}");
+  }
+
+  assert_eq!(refused(served.get("/pass").await), code(404, "no-route"));
+  assert_eq!(refused(served.call(Method::DELETE, "/round", None).await), code(404, "no-route"));
+}
+
+#[tokio::test]
+async fn health_answers_ready_and_the_version() {
+  let served = served().await;
+
+  assert_eq!(
+    served.get("/health").await,
+    (
+      StatusCode::OK,
+      json!({ "ready": true, "reason": null, "version": env!("CARGO_PKG_VERSION") })
+    )
+  );
+}
+
+#[tokio::test]
+async fn a_consumer_is_registered_with_an_http_url_and_listed_by_page() {
+  let served = served().await;
+  let (status, first) = served.put("/consumers/alpha", json!({ "url": "http://127.0.0.1:1/ping" })).await;
+  assert_eq!(status, StatusCode::CREATED);
+  assert_eq!(first["name"], "alpha");
+  assert_eq!(first["createdAt"], NOW);
+  served.clock.advance(MINUTE);
+  let (status, again) = served.put("/consumers/alpha", json!({ "url": "http://127.0.0.1:2/ping" })).await;
+  assert_eq!(status, StatusCode::OK);
+  assert_eq!(
+    again,
+    json!({ "id": first["id"], "name": "alpha", "url": "http://127.0.0.1:2/ping", "createdAt": NOW })
+  );
+
+  for url in ["https://127.0.0.1/ping", "/ping", "not a url"] {
+    assert_eq!(
+      refused(served.put("/consumers/beta", json!({ "url": url })).await),
+      code(422, "invalid-url")
+    );
+  }
+  assert_eq!(refused(served.put("/consumers/beta", json!({})).await), code(400, "bad-request"));
+  assert_eq!(
+    refused(served.put("/consumers/beta", json!({ "url": "http://h/", "x": 1 })).await),
+    code(400, "bad-request")
+  );
+  let long = "n".repeat(257);
+  assert_eq!(
+    refused(served.put(&format!("/consumers/{long}"), json!({ "url": "http://h/" })).await),
+    code(400, "bad-request")
+  );
+
+  served.consumer("beta").await;
+  served.consumer("gamma").await;
+  let (_, page) = served.get("/consumers?limit=2").await;
+  assert_eq!(
+    page["items"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|one| one["name"].clone())
+      .collect::<Vec<_>>(),
+    ["alpha", "beta"]
+  );
+  assert_eq!(page["more"], true);
+  let (_, rest) = served.get(&format!("/consumers?after={}", page["items"][1]["id"])).await;
+  assert_eq!((rest["items"][0]["name"].clone(), rest["more"].clone()), (json!("gamma"), json!(false)));
+  for limit in ["0", "1001", "many"] {
+    assert_eq!(
+      refused(served.get(&format!("/consumers?limit={limit}")).await),
+      code(400, "bad-request")
+    );
+  }
+}
+
+#[tokio::test]
+async fn a_group_lists_the_targets_naming_it_and_is_not_removed_while_named() {
+  let served = served().await;
+  assert_eq!(
+    refused(served.put("/consumers/alpha/groups/large", json!({ "limit": 1 })).await),
+    code(404, "not-found")
+  );
+  served.consumer("alpha").await;
+  let (status, group) = served.put("/consumers/alpha/groups/large", json!({ "limit": 1 })).await;
+  assert_eq!(status, StatusCode::CREATED);
+  assert_eq!(
+    (group["consumerName"].clone(), group["limit"].clone(), group["targetNames"].clone()),
+    (json!("alpha"), json!(1), json!([]))
+  );
+  assert_eq!(
+    refused(served.put("/consumers/alpha/groups/large", json!({ "limit": -1 })).await),
+    code(400, "bad-request")
+  );
+
+  served
+    .target("alpha", "seat", json!({ "ttlMs": 3_600_000, "groupName": "large" }))
+    .await;
+  let (status, group) = served.put("/consumers/alpha/groups/large", json!({ "limit": 2 })).await;
+  assert_eq!((status, group["targetNames"].clone()), (StatusCode::OK, json!(["seat"])));
+  assert_eq!(
+    refused(served.call(Method::DELETE, "/consumers/alpha/groups/large", None).await),
+    code(409, "conflict")
+  );
+
+  served.call(Method::DELETE, "/consumers/alpha/targets/seat", None).await;
+  assert_eq!(
+    served.call(Method::DELETE, "/consumers/alpha/groups/large", None).await,
+    (StatusCode::NO_CONTENT, Value::Null)
+  );
+  assert_eq!(
+    refused(served.call(Method::DELETE, "/consumers/alpha/groups/large", None).await),
+    code(404, "not-found")
+  );
+}
+
+#[tokio::test]
+async fn a_target_is_registered_with_the_policy_filling_what_it_leaves_out() {
+  let served = served().await;
+  assert_eq!(
+    refused(served.put("/consumers/alpha/targets/line", json!({ "ttlMs": 1 })).await),
+    code(404, "not-found")
+  );
+  served.consumer("alpha").await;
+
+  let (status, target) = served.put("/consumers/alpha/targets/line", json!({ "ttlMs": 3_600_000 })).await;
+  assert_eq!(status, StatusCode::CREATED);
+  let id = target["id"].clone();
+  assert_eq!(
+    target,
+    json!({
+      "id": id, "consumerName": "alpha", "name": "line", "kind": null, "label": null, "subjectName": "line",
+      "rank": 0, "groupName": null, "ttlMs": 3_600_000, "idleMs": 2_376_000, "marginMs": 0,
+      "pingBoundMs": 120_000, "warmByDefault": false, "failureTouches": false, "honoursIdleOverride": true,
+      "on": false, "pausedUntil": null, "usedAt": null, "warmedAt": null, "failedAt": null,
+      "lastAttempt": null, "nextPingAt": null,
+    })
+  );
+
+  let restated = json!({
+    "ttlMs": 3_600_000, "idleMs": 2_400_000, "marginMs": 60_000, "pingBoundMs": 90_000, "subjectName": "session",
+    "rank": 7, "kind": "launch-line", "label": "a launch line", "warmByDefault": true, "failureTouches": true,
+    "honoursIdleOverride": false, "usedAt": NOW - MINUTE,
+  });
+  let (status, target) = served.put("/consumers/alpha/targets/line", restated).await;
+  assert_eq!(status, StatusCode::OK);
+  assert_eq!(target["id"], id);
+  assert_eq!(
+    (target["subjectName"].clone(), target["kind"].clone(), target["on"].clone()),
+    (json!("session"), json!("launch-line"), json!(true))
+  );
+  assert_eq!(
+    (target["usedAt"].clone(), target["nextPingAt"].clone()),
+    (json!(NOW - MINUTE), json!(NOW - MINUTE + 2_400_000))
+  );
+}
+
+#[tokio::test]
+async fn a_target_out_of_its_rules_is_refused_by_the_rule_it_breaks() {
+  let served = served().await;
+  served.consumer("alpha").await;
+  let path = "/consumers/alpha/targets/line";
+
+  for body in [
+    json!({ "ttlMs": -1 }),
+    json!({ "ttlMs": 1, "marginMs": -1 }),
+    json!({ "ttlMs": 1, "idleMs": 0 }),
+    json!({ "ttlMs": 1, "pingBoundMs": 0 }),
+  ] {
+    assert_eq!(refused(served.put(path, body.clone()).await), code(422, "invalid-clock"), "{body}");
+  }
+  for kind in ["chat_touch", "Touch", "1st", ""] {
+    assert_eq!(
+      refused(served.put(path, json!({ "ttlMs": 1, "kind": kind })).await),
+      code(422, "invalid-kind"),
+      "{kind}"
+    );
+  }
+  assert_eq!(
+    refused(served.put(path, json!({ "ttlMs": 1, "groupName": "none" })).await),
+    code(422, "unknown-group")
+  );
+  assert_eq!(refused(served.put(path, json!({ "idleMs": 1 })).await), code(400, "bad-request"));
+  assert_eq!(
+    refused(served.put(path, json!({ "ttlMs": 1, "subjectName": "" })).await),
+    code(400, "bad-request")
+  );
+  // A lifetime no larger than its margin is taken, and never due.
+  let never = served
+    .target("alpha", "short", json!({ "ttlMs": 5, "marginMs": 5, "warmByDefault": true }))
+    .await;
+  assert_eq!((never["idleMs"].clone(), never["nextPingAt"].clone()), (json!(1), Value::Null));
+}
+
+#[tokio::test]
+async fn targets_page_by_id_and_narrow_by_consumer_and_subject() {
+  let served = served().await;
+  served.consumer("alpha").await;
+  served.consumer("beta").await;
+  served.target("beta", "touch", json!({ "ttlMs": 1 })).await;
+  served.target("alpha", "b", json!({ "ttlMs": 1, "subjectName": "session" })).await;
+  served.target("alpha", "a", json!({ "ttlMs": 1 })).await;
+
+  let names = |page: &Value| -> Vec<String> {
+    page["items"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|one| format!("{}/{}", one["consumerName"].as_str().unwrap(), one["name"].as_str().unwrap()))
+      .collect()
+  };
+  let (_, first) = served.get("/targets?limit=2").await;
+  assert_eq!(
+    (names(&first), first["more"].clone()),
+    (vec!["beta/touch".to_owned(), "alpha/b".to_owned()], json!(true))
+  );
+  let (_, rest) = served.get(&format!("/targets?limit=2&after={}", first["items"][1]["id"])).await;
+  assert_eq!((names(&rest), rest["more"].clone()), (vec!["alpha/a".to_owned()], json!(false)));
+  assert_eq!(names(&served.get("/targets?consumerName=alpha").await.1), ["alpha/b", "alpha/a"]);
+  assert_eq!(names(&served.get("/targets?subjectName=session").await.1), ["alpha/b"]);
+  assert_eq!(refused(served.get("/targets?after=soon").await), code(400, "bad-request"));
+}
+
+#[tokio::test]
+async fn a_target_is_retired_once() {
+  let served = served().await;
+  served.consumer("alpha").await;
+  let target = served.target("alpha", "line", json!({ "ttlMs": 1 })).await;
+
+  assert_eq!(
+    served.call(Method::DELETE, "/consumers/alpha/targets/line", None).await,
+    (StatusCode::NO_CONTENT, Value::Null)
+  );
+  assert_eq!(
+    refused(served.call(Method::DELETE, "/consumers/alpha/targets/line", None).await),
+    code(404, "not-found")
+  );
+  let events = served.warmer.store().events(0, &["target.deleted".to_owned()], 10).await.unwrap().items;
+  let data: Value = serde_json::from_str(&events[0].data).unwrap();
+  assert_eq!(data, json!({ "id": target["id"], "consumerName": "alpha", "name": "line" }));
+}
+
+#[tokio::test]
+async fn a_use_is_recorded_now_or_when_it_says_and_lifts_only_a_pause_set_before_its_work() {
+  let served = served().await;
+  served.consumer("alpha").await;
+  served
+    .target("alpha", "line", json!({ "ttlMs": 3_600_000, "subjectName": "session" }))
+    .await;
+  let uses = "/consumers/alpha/targets/line/uses";
+
+  let (status, used) = served.call(Method::POST, uses, None).await;
+  assert_eq!(status, StatusCode::CREATED);
+  assert_eq!(
+    used,
+    json!({ "consumerName": "alpha", "targetName": "line", "at": NOW, "startedAt": NOW })
+  );
+  assert_eq!(
+    refused(served.call(Method::POST, "/consumers/alpha/targets/none/uses", None).await),
+    code(404, "not-found")
+  );
+
+  let pause = json!({ "pausedUntil": NOW + 60 * MINUTE });
+  served.call(Method::PATCH, "/consumers/alpha/subjects/session", Some(pause)).await;
+  served
+    .call(Method::POST, uses, Some(json!({ "at": NOW + MINUTE, "startedAt": NOW - MINUTE })))
+    .await;
+  let (_, page) = served.get("/consumers/alpha/subjects").await;
+  assert_eq!(page["items"][0]["pausedUntil"], NOW + 60 * MINUTE);
+
+  served
+    .call(Method::POST, uses, Some(json!({ "at": NOW + 2 * MINUTE, "startedAt": NOW + MINUTE })))
+    .await;
+  let (_, page) = served.get("/consumers/alpha/subjects").await;
+  assert_eq!(
+    (page["items"][0]["pausedAt"].clone(), page["items"][0]["pausedUntil"].clone()),
+    (Value::Null, Value::Null)
+  );
+  let (_, targets) = served.get("/targets").await;
+  assert_eq!(targets["items"][0]["usedAt"], NOW + 2 * MINUTE);
+  assert_eq!(
+    served.kinds().await,
+    [
+      "target.changed",
+      "target.changed",
+      "subject.changed",
+      "target.changed",
+      "target.changed",
+      "subject.changed"
+    ]
+  );
+}
+
+#[tokio::test]
+async fn a_subject_is_switched_and_paused_by_merge_patch() {
+  let served = served().await;
+  let path = "/consumers/alpha/subjects/session";
+  assert_eq!(
+    refused(served.call(Method::PATCH, path, Some(json!({ "on": true }))).await),
+    code(404, "not-found")
+  );
+  served.consumer("alpha").await;
+
+  // A subject no target names yet is made by its first change.
+  let (status, subject) = served.call(Method::PATCH, path, Some(json!({ "on": false }))).await;
+  assert_eq!(status, StatusCode::OK);
+  let id = subject["id"].clone();
+  assert_eq!(
+    subject,
+    json!({ "id": id, "consumerName": "alpha", "name": "session", "on": false, "pausedAt": null, "pausedUntil": null, "targetCount": 0 })
+  );
+  served
+    .target("alpha", "line", json!({ "ttlMs": 1, "subjectName": "session", "warmByDefault": true }))
+    .await;
+
+  let (_, paused) = served.call(Method::PATCH, path, Some(json!({ "pausedUntil": NOW + MINUTE }))).await;
+  assert_eq!(
+    (
+      paused["on"].clone(),
+      paused["pausedAt"].clone(),
+      paused["pausedUntil"].clone(),
+      paused["targetCount"].clone()
+    ),
+    (json!(false), json!(NOW), json!(NOW + MINUTE), json!(1))
+  );
+  let (_, unset) = served.call(Method::PATCH, path, Some(json!({ "on": null }))).await;
+  assert_eq!((unset["on"].clone(), unset["pausedUntil"].clone()), (Value::Null, json!(NOW + MINUTE)));
+  let (_, lifted) = served.call(Method::PATCH, path, Some(json!({ "pausedUntil": null }))).await;
+  assert_eq!(lifted["pausedUntil"], Value::Null);
+  let (_, kept) = served.call(Method::PATCH, path, Some(json!({}))).await;
+  assert_eq!(kept, lifted);
+
+  assert_eq!(
+    refused(served.call(Method::PATCH, path, Some(json!({ "pausedUntil": NOW }))).await),
+    code(422, "invalid-clock")
+  );
+  assert_eq!(
+    refused(served.call(Method::PATCH, path, Some(json!({ "on": "yes" }))).await),
+    code(400, "bad-request")
+  );
+  assert_eq!(refused(served.get("/consumers/nobody/subjects").await), code(404, "not-found"));
+
+  // A pause whose time has passed no longer stands.
+  served.call(Method::PATCH, path, Some(json!({ "pausedUntil": NOW + MINUTE }))).await;
+  served.clock.advance(MINUTE);
+  let (_, page) = served.get("/consumers/alpha/subjects").await;
+  assert_eq!(
+    (page["items"][0]["pausedUntil"].clone(), page["more"].clone()),
+    (Value::Null, json!(false))
+  );
+}
+
+#[tokio::test]
+async fn the_round_answers_its_interval_and_next_time_and_changes_by_merge_patch() {
+  let served = served().await;
+
+  let (status, round) = served.get("/round").await;
+  assert_eq!(status, StatusCode::OK);
+  assert_eq!((round["intervalMs"].clone(), round["running"].clone()), (json!(60_000), json!(true)));
+  let next = round["nextAt"].as_i64().unwrap();
+  assert!((NOW..=NOW + 30_000).contains(&next), "{round}");
+
+  let (_, round) = served
+    .call(Method::PATCH, "/round", Some(json!({ "intervalMs": 5_000, "running": false })))
+    .await;
+  assert_eq!((round["intervalMs"].clone(), round["running"].clone()), (json!(5_000), json!(false)));
+  let (_, round) = served.call(Method::PATCH, "/round", Some(json!({ "running": true }))).await;
+  assert_eq!((round["intervalMs"].clone(), round["running"].clone()), (json!(5_000), json!(true)));
+  let (_, round) = served.call(Method::PATCH, "/round", Some(json!({ "intervalMs": null }))).await;
+  assert_eq!(round["intervalMs"], 60_000);
+  assert_eq!(served.warmer.beat().interval(), Duration::from_secs(60));
+
+  for body in [json!({ "intervalMs": 0 }), json!({ "intervalMs": -5 })] {
+    assert_eq!(
+      refused(served.call(Method::PATCH, "/round", Some(body)).await),
+      code(422, "invalid-clock")
+    );
+  }
+  assert_eq!(
+    refused(served.call(Method::PATCH, "/round", Some(json!({ "stopped": true }))).await),
+    code(400, "bad-request")
+  );
+  assert_eq!(served.kinds().await, ["round.changed", "round.changed", "round.changed"]);
+}
+
+#[tokio::test]
+async fn a_pass_asked_for_runs_now_and_one_already_running_is_refused() {
+  let served = served().await;
+  let held = Arc::new(tokio::sync::Notify::new());
+  let arrived = Arc::new(tokio::sync::Notify::new());
   let hook = Router::new().route(
     "/ping",
-    post(move || {
-      let held = held.lock().expect("the hold").clone();
-      async move {
-        if let Some(hold) = held {
-          hold.arrived.notify_one();
-          hold.release.notified().await;
-        }
-        axum::Json(json!({ "outcome": "warmed" }))
+    post({
+      let (held, arrived) = (held.clone(), arrived.clone());
+      move || async move {
+        arrived.notify_one();
+        held.notified().await;
+        Status::NO_CONTENT
       }
     }),
   );
-  let hook_url = format!("{}/ping", serve(hook).await);
-
-  Service {
-    _dir: dir,
-    store,
-    clock,
-    base,
-    hook_url,
-    hold,
-    client: reqwest::Client::new(),
-  }
-}
-
-impl Service {
-  /// Asks a route with a raw body, or none; answers the status and the body, null when there is none.
-  async fn raw(&self, method: Method, path: &str, body: Option<&str>) -> (u16, Value) {
-    let mut request = self.client.request(method, format!("{}{path}", self.base));
-    if let Some(body) = body {
-      request = request.header("content-type", "application/json").body(body.to_owned());
-    }
-    let response = request.send().await.expect("the warmer answers");
-    let status = response.status().as_u16();
-    let text = response.text().await.expect("the answer's body");
-    let body = if text.is_empty() {
-      Value::Null
-    } else {
-      serde_json::from_str(&text).expect("a JSON answer")
-    };
-
-    (status, body)
-  }
-
-  async fn ask(&self, method: Method, path: &str, body: Value) -> (u16, Value) {
-    self.raw(method, path, Some(&body.to_string())).await
-  }
-
-  async fn get(&self, path: &str) -> (u16, Value) {
-    self.raw(Method::GET, path, None).await
-  }
-
-  async fn consumer(&self) {
-    let (status, _) =
-      self.ask(Method::PUT, "/consumers/agency", json!({ "hook_url": self.hook_url })).await;
-    assert_eq!(status, 201);
-  }
-
-  async fn target(&self, name: &str, body: Value) -> (u16, Value) {
-    self.ask(Method::PUT, &format!("/consumers/agency/targets/{name}"), body).await
-  }
-
-  async fn listed(&self, name: &str) -> Value {
-    let (_, list) = self.get("/targets").await;
-    let found = list["targets"].as_array().expect("a list").iter().find(|entry| entry["target"] == name);
-    found.cloned().expect("the target is listed")
-  }
-}
-
-/// A launch line's registration body.
-fn line(subject: &str) -> Value {
-  json!({
-    "kind": "launch_line",
-    "label": "A launch line",
-    "subject": subject,
-    "rank": 50,
-    "idle_ms": IDLE,
-    "lifetime_ms": 60 * MINUTE,
-    "ping_bound_ms": 90_000,
-    "warm_by_default": true,
-    "failure_touches": true,
-  })
-}
-
-fn with(mut body: Value, field: &str, value: Value) -> Value {
-  body[field] = value;
-  body
-}
-
-/// Asserts a refusal: its status, its code, and an English sentence beside it and nothing else.
-fn refused(answer: &(u16, Value), status: u16, code: &str) {
-  let (got, body) = answer;
-  assert_eq!(*got, status, "{body}");
-  assert_eq!(body["code"], code, "{body}");
-  let error = body["error"].as_str().expect("an error sentence");
-  assert!(error.ends_with('.') && error.starts_with(char::is_uppercase), "{error}");
-  assert_eq!(body.as_object().map(|fields| fields.len()), Some(2), "{body}");
-}
-
-#[tokio::test]
-async fn health_names_the_service_and_its_version() {
-  let service = service().await;
-
-  assert_eq!(
-    service.get("/health").await,
-    (
-      200,
-      json!({ "ok": true, "service": "cache-warmer", "version": env!("CARGO_PKG_VERSION") })
-    )
-  );
-}
-
-#[tokio::test]
-async fn health_and_every_read_answer_database_when_the_store_cannot_be_read() {
-  let service = service().await;
-  Migrator::down(service.store.connection(), None).await.expect("the shape goes down");
-
-  refused(&service.get("/health").await, 500, "database");
-  refused(&service.get("/round").await, 500, "database");
-}
-
-#[tokio::test]
-async fn the_round_runs_until_stopped_and_reads_back() {
-  let service = service().await;
-  assert_eq!(service.get("/round").await, (200, json!({ "stopped": false })));
-
-  assert_eq!(
-    service.ask(Method::PUT, "/round", json!({ "stopped": true })).await,
-    (200, json!({ "stopped": true }))
-  );
-  assert_eq!(service.get("/round").await, (200, json!({ "stopped": true })));
-
-  assert_eq!(
-    service.ask(Method::PUT, "/round", json!({ "stopped": false })).await,
-    (200, json!({ "stopped": false }))
-  );
-  assert_eq!(service.get("/round").await, (200, json!({ "stopped": false })));
-}
-
-#[tokio::test]
-async fn a_round_body_that_does_not_read_is_refused_and_moves_nothing() {
-  let service = service().await;
-
-  refused(&service.raw(Method::PUT, "/round", Some("not json")).await, 400, "invalid_body");
-  refused(
-    &service.ask(Method::PUT, "/round", json!({ "stopped": "yes" })).await,
-    400,
-    "invalid_body",
-  );
-  refused(&service.ask(Method::PUT, "/round", json!({})).await, 400, "invalid_body");
-  refused(&service.raw(Method::PUT, "/round", None).await, 400, "invalid_body");
-  assert_eq!(service.get("/round").await, (200, json!({ "stopped": false })));
-}
-
-#[tokio::test]
-async fn a_subjects_switch_is_thrown_before_any_target_and_unset_with_null() {
-  let service = service().await;
-  service.consumer().await;
-
-  let path = "/consumers/agency/subjects/worker/switch";
-  assert_eq!(
-    service.ask(Method::PUT, path, json!({ "on": false })).await,
-    (200, json!({ "subject": "worker", "switch": "off", "paused_at": null, "targets": 0 }))
-  );
-  service.target("line", line("worker")).await;
-  assert_eq!(service.listed("line").await["on"], false);
-  assert_eq!(service.listed("line").await["due_at"], Value::Null);
-
-  let (status, on) = service.ask(Method::PUT, path, json!({ "on": true })).await;
-  assert_eq!((status, &on["switch"], &on["targets"]), (200, &json!("on"), &json!(1)));
-  let (status, unset) = service.ask(Method::PUT, path, json!({ "on": null })).await;
-  assert_eq!((status, &unset["switch"]), (200, &Value::Null));
-  assert_eq!(service.listed("line").await["on"], true);
-  let (_, unset) = service.raw(Method::PUT, path, None).await;
-  assert_eq!(unset["switch"], Value::Null);
-
-  assert_eq!(
-    service.get("/consumers/agency/subjects").await,
-    (
-      200,
-      json!({ "subjects": [{ "subject": "worker", "switch": null, "paused_at": null, "targets": 1 }] })
-    )
-  );
-}
-
-#[tokio::test]
-async fn a_pause_holds_until_work_begun_after_it_is_reported() {
-  let service = service().await;
-  service.consumer().await;
-  service.target("line", line("worker")).await;
-
-  service.clock.set(NOW + MINUTE);
-  let (status, paused) = service.raw(Method::POST, "/consumers/agency/subjects/worker/pause", None).await;
-  assert_eq!((status, &paused["paused_at"]), (200, &json!(NOW + MINUTE)));
-  let listed = service.listed("line").await;
-  assert_eq!(
-    (&listed["paused_at"], &listed["on"], &listed["due_at"]),
-    (&json!(NOW + MINUTE), &json!(true), &Value::Null)
-  );
-
-  let used = "/consumers/agency/targets/line/used";
-  let before = service
-    .ask(Method::POST, used, json!({ "at": NOW + 2 * MINUTE, "started_at": NOW }))
+  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let url = format!("http://{}/ping", listener.local_addr().unwrap());
+  tokio::spawn(async move { axum::serve(listener, hook).await.unwrap() });
+  served.put("/consumers/alpha", json!({ "url": url })).await;
+  served
+    .target("alpha", "line", json!({ "ttlMs": 3_600_000, "warmByDefault": true }))
     .await;
-  assert_eq!(before, (204, Value::Null));
-  assert_eq!(service.listed("line").await["paused_at"], json!(NOW + MINUTE));
-  assert_eq!(service.listed("line").await["last_used_at"], json!(NOW + 2 * MINUTE));
 
-  service.clock.set(NOW + 3 * MINUTE);
-  assert_eq!(service.raw(Method::POST, used, None).await, (204, Value::Null));
-  let listed = service.listed("line").await;
+  let first = tokio::spawn({
+    let (http, base) = (served.http.clone(), served.base.clone());
+    async move { http.post(format!("{base}/passes")).bearer_auth(TOKEN).send().await.unwrap() }
+  });
+  arrived.notified().await;
+  assert_eq!(refused(served.call(Method::POST, "/passes", None).await), code(409, "conflict"));
+  held.notify_one();
+  let answer = first.await.unwrap();
+  assert_eq!(answer.status(), StatusCode::CREATED);
+  let pass: Value = answer.json().await.unwrap();
   assert_eq!(
-    (&listed["paused_at"], &listed["last_used_at"]),
-    (&Value::Null, &json!(NOW + 3 * MINUTE))
-  );
-  assert_eq!(listed["due_at"], json!(NOW + 3 * MINUTE + IDLE));
-}
-
-#[tokio::test]
-async fn the_switches_refuse_a_consumer_never_registered() {
-  let service = service().await;
-
-  refused(
-    &service
-      .ask(Method::PUT, "/consumers/nobody/subjects/worker/switch", json!({ "on": true }))
-      .await,
-    404,
-    "unknown_consumer",
-  );
-  refused(
-    &service.raw(Method::POST, "/consumers/nobody/subjects/worker/pause", None).await,
-    404,
-    "unknown_consumer",
-  );
-  refused(&service.get("/consumers/nobody/subjects").await, 404, "unknown_consumer");
-  refused(
-    &service.raw(Method::POST, "/consumers/nobody/targets/line/used", None).await,
-    404,
-    "unknown_target",
-  );
-}
-
-#[tokio::test]
-async fn a_consumer_is_made_then_moved_and_its_hook_must_be_http() {
-  let service = service().await;
-  let path = "/consumers/agency";
-
-  let made = service.ask(Method::PUT, path, json!({ "hook_url": "http://127.0.0.1:9/ping" })).await;
-  assert_eq!(made, (201, json!({ "consumer": "agency", "hook_url": "http://127.0.0.1:9/ping" })));
-  let moved = service.ask(Method::PUT, path, json!({ "hook_url": "http://localhost:10/ping" })).await;
-  assert_eq!(moved, (200, json!({ "consumer": "agency", "hook_url": "http://localhost:10/ping" })));
-
-  for hook_url in ["https://127.0.0.1:9/ping", "ftp://127.0.0.1/ping", "/ping", "not a url", "http://"] {
-    refused(
-      &service.ask(Method::PUT, path, json!({ "hook_url": hook_url })).await,
-      400,
-      "invalid_hook_url",
-    );
-  }
-  refused(&service.ask(Method::PUT, path, json!({})).await, 400, "invalid_body");
-  refused(&service.ask(Method::PUT, path, json!({ "hook_url": 7 })).await, 400, "invalid_body");
-  assert_eq!(
-    service.store.hook_url("agency").await.expect("the hook").as_deref(),
-    Some("http://localhost:10/ping")
-  );
-}
-
-#[tokio::test]
-async fn names_are_percent_decoded_and_held_to_their_length() {
-  let service = service().await;
-
-  let (status, made) = service
-    .ask(Method::PUT, "/consumers/two%20words", json!({ "hook_url": service.hook_url }))
-    .await;
-  assert_eq!((status, &made["consumer"]), (201, &json!("two words")));
-
-  let long = "n".repeat(257);
-  let at_most = "n".repeat(256);
-  refused(
-    &service
-      .ask(Method::PUT, &format!("/consumers/{long}"), json!({ "hook_url": service.hook_url }))
-      .await,
-    400,
-    "invalid_name",
-  );
-  let (status, _) = service
-    .ask(Method::PUT, &format!("/consumers/{at_most}"), json!({ "hook_url": service.hook_url }))
-    .await;
-  assert_eq!(status, 201);
-  refused(
-    &service
-      .ask(Method::PUT, "/consumers/%FF", json!({ "hook_url": service.hook_url }))
-      .await,
-    400,
-    "invalid_name",
-  );
-
-  service.consumer().await;
-  refused(
-    &service.ask(Method::PUT, "/consumers//targets/line", line("a")).await,
-    400,
-    "invalid_name",
-  );
-  refused(&service.target("line", line(&long)).await, 400, "invalid_name");
-  refused(&service.target("line", line("")).await, 400, "invalid_name");
-  refused(&service.target("line", with(line("a"), "group", json!(""))).await, 400, "invalid_name");
-}
-
-#[tokio::test]
-async fn a_path_or_method_no_route_serves_is_refused_in_the_one_shape() {
-  let service = service().await;
-
-  refused(&service.get("/keepalive").await, 404, "unknown_route");
-  refused(&service.get("/consumers/agency/targets").await, 404, "unknown_route");
-  refused(&service.raw(Method::DELETE, "/round", None).await, 405, "unknown_route");
-}
-
-#[tokio::test]
-async fn a_group_needs_its_consumer_and_is_not_retired_while_named() {
-  let service = service().await;
-  let path = "/consumers/agency/groups/opus";
-
-  refused(&service.ask(Method::PUT, path, json!({ "limit": 2 })).await, 404, "unknown_consumer");
-  service.consumer().await;
-  assert_eq!(
-    service.ask(Method::PUT, path, json!({ "limit": 2 })).await,
-    (201, json!({ "consumer": "agency", "group": "opus", "limit": 2 }))
-  );
-  assert_eq!(
-    service.ask(Method::PUT, path, json!({ "limit": 0 })).await,
-    (200, json!({ "consumer": "agency", "group": "opus", "limit": 0 }))
-  );
-  refused(&service.ask(Method::PUT, path, json!({ "limit": -1 })).await, 400, "invalid_body");
-
-  service.target("place", with(line("owner"), "group", json!("opus"))).await;
-  refused(&service.raw(Method::DELETE, path, None).await, 409, "group_in_use");
-  assert_eq!(
-    service.raw(Method::DELETE, "/consumers/agency/targets/place", None).await,
-    (204, Value::Null)
-  );
-  assert_eq!(service.raw(Method::DELETE, path, None).await, (204, Value::Null));
-  refused(&service.raw(Method::DELETE, path, None).await, 404, "unknown_group");
-}
-
-#[tokio::test]
-async fn a_target_is_registered_with_its_defaults_and_listed_whole() {
-  let service = service().await;
-  service.consumer().await;
-
-  let bare = json!({ "kind": "worker_session", "label": "A worker", "rank": 80, "idle_ms": IDLE, "ping_bound_ms": 120_000 });
-  let (status, made) = service.target("opus", bare).await;
-  assert_eq!(status, 201);
-  assert_eq!(
-    made,
+    pass,
     json!({
-      "consumer": "agency",
-      "target": "opus",
-      "kind": "worker_session",
-      "label": "A worker",
-      "subject": "opus",
-      "rank": 80,
-      "group": null,
-      "idle_ms": IDLE,
-      "lifetime_ms": null,
-      "margin_ms": 0,
-      "ping_bound_ms": 120_000,
-      "warm_by_default": false,
-      "failure_touches": false,
-      "honours_idle_override": true,
-      "on": false,
-      "paused_at": null,
-      "last_used_at": null,
-      "last_warmed_at": null,
-      "last_failed_at": null,
-      "last_attempt": null,
-      "due_at": null,
+      "at": NOW, "pingedCount": 1, "stopped": false,
+      "attempts": [{ "consumerName": "alpha", "targetName": "line", "at": NOW, "outcome": "warmed", "code": null, "reason": null }],
     })
   );
-  assert_eq!(service.listed("opus").await, made);
-}
-
-#[tokio::test]
-async fn restating_a_target_keeps_its_record_and_its_subjects_switch() {
-  let service = service().await;
-  service.consumer().await;
-  let (status, made) =
-    service.target("line", with(line("worker"), "last_used_at", json!(NOW - MINUTE))).await;
-  assert_eq!((status, &made["due_at"]), (201, &json!(NOW - MINUTE + IDLE)));
-  service
-    .ask(Method::PUT, "/consumers/agency/subjects/worker/switch", json!({ "on": false }))
-    .await;
-
-  let restated = with(with(line("worker"), "label", json!("Restated")), "last_used_at", json!(NOW - IDLE));
-  let (status, again) = service.target("line", restated).await;
-  assert_eq!(status, 200);
   assert_eq!(
-    (&again["label"], &again["last_used_at"], &again["on"]),
-    (&json!("Restated"), &json!(NOW - MINUTE), &json!(false))
+    refused(served.call(Method::POST, "/passes", Some(json!({ "idleOverrideMs": 0 }))).await),
+    code(422, "invalid-clock")
   );
 }
 
 #[tokio::test]
-async fn a_registration_out_of_its_shape_is_refused_by_its_code() {
-  let service = service().await;
-  refused(&service.target("line", line("a")).await, 404, "unknown_consumer");
-  service.consumer().await;
-
-  refused(
-    &service.target("line", with(line("a"), "kind", json!("Launch Line"))).await,
-    400,
-    "invalid_kind",
-  );
-  for (field, value) in [
-    ("idle_ms", json!(0)),
-    ("ping_bound_ms", json!(0)),
-    ("lifetime_ms", json!(-1)),
-    ("margin_ms", json!(-1)),
-  ] {
-    refused(&service.target("line", with(line("a"), field, value)).await, 400, "invalid_clock");
-  }
-  refused(
-    &service.target("line", with(line("a"), "group", json!("missing"))).await,
-    409,
-    "unknown_group",
-  );
-  refused(
-    &service.target("line", with(line("a"), "rank", json!("first"))).await,
-    400,
-    "invalid_body",
-  );
-  refused(
-    &service.target("line", with(line("a"), "idle_ms", json!(1.5))).await,
-    400,
-    "invalid_body",
-  );
-  let mut missing = line("a");
-  missing.as_object_mut().expect("an object").remove("kind");
-  refused(&service.target("line", missing).await, 400, "invalid_body");
-
-  let (_, list) = service.get("/targets").await;
-  assert_eq!(list, json!({ "targets": [] }));
-
-  // A lifetime no larger than its margin is accepted, and never due.
-  let short = with(line("a"), "margin_ms", json!(60 * MINUTE));
-  let (status, made) = service.target("short", short).await;
-  assert_eq!((status, &made["due_at"]), (201, &Value::Null));
-}
-
-#[tokio::test]
-async fn retiring_a_target_leaves_its_subject_and_refuses_one_never_registered() {
-  let service = service().await;
-  service.consumer().await;
-  service.target("line", line("worker")).await;
-
-  assert_eq!(
-    service.raw(Method::DELETE, "/consumers/agency/targets/line", None).await,
-    (204, Value::Null)
-  );
-  refused(
-    &service.raw(Method::DELETE, "/consumers/agency/targets/line", None).await,
-    404,
-    "unknown_target",
-  );
-  let (_, subjects) = service.get("/consumers/agency/subjects").await;
-  assert_eq!(subjects["subjects"][0]["targets"], 0);
-}
-
-#[tokio::test]
-async fn targets_list_in_pass_order_and_narrow_by_consumer_and_subject() {
-  let service = service().await;
-  service.consumer().await;
-  service
-    .ask(Method::PUT, "/consumers/receiver", json!({ "hook_url": service.hook_url }))
-    .await;
-  service.ask(Method::PUT, "/consumers/receiver/targets/chat", line("chat")).await;
-  service.target("b", line("worker")).await;
-  service.target("a", with(line("other"), "rank", json!(10))).await;
-
-  let names = |list: Value| -> Vec<String> {
-    list["targets"]
-      .as_array()
-      .expect("a list")
-      .iter()
-      .map(|entry| {
-        format!(
-          "{}/{}",
-          entry["consumer"].as_str().unwrap_or_default(),
-          entry["target"].as_str().unwrap_or_default()
-        )
-      })
-      .collect()
+async fn events_are_read_as_a_page_narrowed_and_resumed_and_a_cursor_past_the_window_is_gone() {
+  let served = served().await;
+  served.consumer("alpha").await;
+  served.target("alpha", "line", json!({ "ttlMs": 1 })).await;
+  served.call(Method::PATCH, "/round", Some(json!({ "running": false }))).await;
+  served.call(Method::POST, "/passes", None).await;
+  let page = |query: &str| {
+    let request = served
+      .http
+      .get(format!("{}/events{query}", served.base))
+      .bearer_auth(TOKEN)
+      .header("accept", "application/json");
+    async move { request.send().await.unwrap().json::<Value>().await.unwrap() }
   };
-  assert_eq!(names(service.get("/targets").await.1), vec!["agency/a", "agency/b", "receiver/chat"]);
-  assert_eq!(names(service.get("/targets?consumer=receiver").await.1), vec!["receiver/chat"]);
-  assert_eq!(names(service.get("/targets?consumer=agency&subject=worker").await.1), vec!["agency/b"]);
-  assert_eq!(names(service.get("/targets?subject=two%20words").await.1), Vec::<String>::new());
-  refused(&service.get("/targets?consumer=agency&consumer=receiver").await, 400, "invalid_name");
+
+  let all = page("").await;
+  let kinds: Vec<&str> = all["items"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|event| event["kind"].as_str().unwrap())
+    .collect();
+  assert_eq!(kinds, ["target.changed", "round.changed", "pass.created"]);
+  let first = &all["items"][0];
+  assert_eq!((first["at"].clone(), first["data"]["name"].clone()), (json!(NOW), json!("line")));
+
+  let narrowed = page("?kinds=pass.created,round.changed&limit=1").await;
+  assert_eq!(
+    (narrowed["items"][0]["kind"].clone(), narrowed["more"].clone()),
+    (json!("round.changed"), json!(true))
+  );
+  let resumed = page(&format!("?after={}", all["items"][1]["id"])).await;
+  assert_eq!(resumed["items"].as_array().unwrap().len(), 1);
+
+  served.warmer.store().prune_events(NOW + 1).await.unwrap();
+  let gone = served
+    .http
+    .get(format!("{}/events?after=0", served.base))
+    .bearer_auth(TOKEN)
+    .send()
+    .await
+    .unwrap();
+  assert_eq!(gone.status(), StatusCode::GONE);
+  let last = all["items"][2]["id"].as_i64().unwrap();
+  let current = page(&format!("?after={last}")).await;
+  assert_eq!(current, json!({ "items": [], "more": false }));
+
+  // A reader with no cursor starts at the window, whatever was pruned before it.
+  served.call(Method::PATCH, "/round", Some(json!({ "running": true }))).await;
+  let fresh = page("").await;
+  assert_eq!(fresh["items"].as_array().unwrap().len(), 1);
+  assert_eq!(fresh["items"][0]["id"], last + 1);
 }
 
-#[tokio::test]
-async fn a_pass_runs_on_asking_and_answers_what_it_pinged() {
-  let service = service().await;
-  service.consumer().await;
-  service.target("line", line("worker")).await;
-
-  assert_eq!(
-    service.raw(Method::POST, "/pass", None).await,
-    (
-      200,
-      json!({
-        "stopped": false,
-        "attempts": [{ "consumer": "agency", "target": "line", "outcome": "warmed", "code": null, "reason": null }],
-      })
-    )
-  );
-  let listed = service.listed("line").await;
-  assert_eq!(
-    (&listed["last_warmed_at"], &listed["last_attempt"]["outcome"]),
-    (&json!(NOW), &json!("warmed"))
-  );
-
-  service.clock.advance(10 * MINUTE);
-  assert_eq!(service.ask(Method::POST, "/pass", json!({})).await.1["attempts"], json!([]));
-  let overridden = service.ask(Method::POST, "/pass", json!({ "idle_override_ms": 5 * MINUTE })).await;
-  assert_eq!(overridden.1["attempts"][0]["target"], "line");
-
-  for stretch in [json!(0), json!(-1)] {
-    refused(
-      &service.ask(Method::POST, "/pass", json!({ "idle_override_ms": stretch })).await,
-      400,
-      "invalid_clock",
-    );
+/// Reads a stream's body into `text` until it holds `wanted`, each chunk waited for a bounded time.
+async fn read_until(response: &mut reqwest::Response, text: &mut String, wanted: &str) {
+  while !text.contains(wanted) {
+    let chunk = tokio::time::timeout(Duration::from_secs(10), response.chunk())
+      .await
+      .expect("the stream speaks in time");
+    text.push_str(&String::from_utf8_lossy(&chunk.expect("a chunk reads").expect("the stream stays open")));
   }
-
-  service.ask(Method::PUT, "/round", json!({ "stopped": true })).await;
-  assert_eq!(
-    service.raw(Method::POST, "/pass", None).await,
-    (200, json!({ "stopped": true, "attempts": [] }))
-  );
 }
 
 #[tokio::test]
-async fn a_pass_asked_for_while_one_runs_is_refused() {
-  let service = Arc::new(service().await);
-  service.consumer().await;
-  service.target("line", line("worker")).await;
-  let hold = Hold {
-    arrived: Arc::new(Notify::new()),
-    release: Arc::new(Notify::new()),
-  };
-  *service.hold.lock().expect("the hold") = Some(hold.clone());
+async fn the_stream_sends_what_stands_past_its_cursor_then_each_event_as_it_is_published() {
+  let served = served().await;
+  served.consumer("alpha").await;
+  served.target("alpha", "line", json!({ "ttlMs": 1 })).await;
 
-  let running = tokio::spawn({
-    let service = service.clone();
-    async move { service.raw(Method::POST, "/pass", None).await }
-  });
-  hold.arrived.notified().await;
-  refused(&service.raw(Method::POST, "/pass", None).await, 409, "pass_running");
+  let mut response = served
+    .http
+    .get(format!("{}/events?kinds=target.changed,target.deleted", served.base))
+    .bearer_auth(TOKEN)
+    .send()
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  assert!(response.headers()["content-type"].to_str().unwrap().starts_with("text/event-stream"));
+  let mut text = String::new();
 
-  hold.release.notify_one();
-  let (status, first) = running.await.expect("the first pass ends");
-  assert_eq!((status, first["attempts"].as_array().map(Vec::len)), (200, Some(1)));
+  read_until(&mut response, &mut text, "event: target.changed").await;
+  served.call(Method::PATCH, "/round", Some(json!({ "running": false }))).await;
+  served.call(Method::DELETE, "/consumers/alpha/targets/line", None).await;
+  read_until(&mut response, &mut text, "event: target.deleted").await;
+  assert!(!text.contains("round.changed"), "{text}");
+  let data = text.lines().filter_map(|line| line.strip_prefix("data: ")).next_back().unwrap();
+  let event: Value = serde_json::from_str(data).unwrap();
+  assert_eq!(
+    (event["kind"].clone(), event["data"]["name"].clone()),
+    (json!("target.deleted"), json!("line"))
+  );
+  assert!(text.contains(&format!("id: {}", event["id"])), "{text}");
 }

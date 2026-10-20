@@ -11,9 +11,10 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, post};
 use axum::{Json, Router};
-use bmo_cache_warmer::pass::{PassError, Report, Warmer};
+use bmo_cache_warmer::pass::{PassError, Warmer};
 use bmo_cache_warmer::policy::Policy;
-use bmo_cache_warmer::store::{Attempt, Outcome, Registration, Store};
+use bmo_cache_warmer::store::{Attempt, Outcome, Pause, Registration, RoundChange, Store, SubjectChange};
+use bmo_cache_warmer::wire::Pass;
 use fixtures::{IDLE, MINUTE, NOW, TestClock, line, place, store};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -55,20 +56,23 @@ struct Consumer {
 }
 
 async fn hook(State(consumer): State<Arc<Consumer>>, Json(ping): Json<Value>) -> Response {
-  let target = ping["target"].as_str().unwrap_or_default().to_owned();
+  let target = ping["targetName"].as_str().unwrap_or_default().to_owned();
   consumer.heard.lock().expect("the log of pings").push(ping);
   let scripted = consumer.script.lock().expect("the script").get(&target).cloned();
-  let (acts, reply) =
-    scripted.unwrap_or_else(|| (Vec::new(), Reply::Answer(json!({ "outcome": "warmed" }))));
+  let (acts, reply) = scripted.unwrap_or_else(|| (Vec::new(), Reply::Status(204)));
 
   for act in acts {
     match act {
-      Act::StopRound => consumer.store.set_round_stopped(true).await.expect("the round stops"),
+      Act::StopRound => stop(&consumer.store).await,
       Act::SwitchOff(subject) => {
-        consumer.store.set_switch("agency", subject, Some(false)).await.expect("the switch");
+        let off = SubjectChange {
+          switch: Some(Some(false)),
+          ..SubjectChange::default()
+        };
+        consumer.store.change_subject("alpha", subject, off).await.expect("the switch");
       }
       Act::Retire(target) => {
-        consumer.store.delete_target("agency", target).await.expect("the target retires")
+        consumer.store.delete_target("alpha", target).await.expect("the target retires");
       }
       Act::Advance(by) => consumer.clock.advance(by),
     }
@@ -82,13 +86,21 @@ async fn hook(State(consumer): State<Arc<Consumer>>, Json(ping): Json<Value>) ->
     Reply::Held { arrived, release } => {
       arrived.notify_one();
       release.notified().await;
-      Json(json!({ "outcome": "warmed" })).into_response()
+      StatusCode::NO_CONTENT.into_response()
     }
     Reply::Never => std::future::pending().await,
   }
 }
 
-/// A store, a clock at `NOW`, and the consumer `agency` whose hook is the fake one.
+async fn stop(store: &Store) {
+  let stopped = RoundChange {
+    stopped: Some(true),
+    ..RoundChange::default()
+  };
+  store.change_round(stopped).await.expect("the round stops");
+}
+
+/// A store, a clock at `NOW`, and the consumer `alpha` whose hook is the fake one.
 struct Bench {
   _dir: TempDir,
   store: Store,
@@ -110,10 +122,10 @@ async fn bench() -> Bench {
   let hook_url = format!("http://{}/ping", listener.local_addr().expect("the port's address"));
   let app = Router::new()
     .route("/ping", post(hook))
-    .route("/warm", any(|| async { Json(json!({ "outcome": "warmed" })) }))
+    .route("/warm", any(|| async { StatusCode::NO_CONTENT }))
     .with_state(consumer.clone());
   tokio::spawn(async move { axum::serve(listener, app).await.expect("the fake consumer serves") });
-  store.put_consumer("agency", &hook_url).await.expect("the consumer");
+  store.put_consumer("alpha", &hook_url, NOW).await.expect("the consumer");
 
   Bench {
     _dir: dir,
@@ -124,16 +136,18 @@ async fn bench() -> Bench {
 }
 
 impl Bench {
-  fn warmer(&self) -> Warmer {
-    self.warmer_with(Policy::builtin().expect("the built-in policy"))
+  async fn warmer(&self) -> Warmer {
+    self.warmer_with(Policy::builtin().expect("the built-in policy")).await
   }
 
-  fn warmer_with(&self, policy: Policy) -> Warmer {
-    Warmer::new(self.store.clone(), policy, self.clock.clone())
+  async fn warmer_with(&self, policy: Policy) -> Warmer {
+    Warmer::open(self.store.clone(), policy, self.clock.clone())
+      .await
+      .expect("the warmer opens")
   }
 
   async fn register(&self, target: &str, registration: Registration) {
-    self.store.put_target("agency", target, &registration).await.expect("a target");
+    self.store.put_target("alpha", target, &registration).await.expect("a target");
   }
 
   fn script(&self, target: &str, acts: Vec<Act>, reply: Reply) {
@@ -149,12 +163,12 @@ impl Bench {
     let mut heard = self.consumer.heard.lock().expect("the log of pings");
     heard
       .drain(..)
-      .map(|ping| ping["target"].as_str().unwrap_or_default().to_owned())
+      .map(|ping| ping["targetName"].as_str().unwrap_or_default().to_owned())
       .collect()
   }
 
   async fn last(&self, target: &str) -> Attempt {
-    let target = self.store.target("agency", target).await.expect("the target").expect("it stands");
+    let target = self.store.target("alpha", target).await.expect("the target").expect("it stands");
     target.last_attempt.expect("an attempt")
   }
 }
@@ -164,8 +178,8 @@ fn used(mut registration: Registration, at: i64) -> Registration {
   registration
 }
 
-fn pinged(report: &Report) -> Vec<&str> {
-  report.attempts.iter().map(|pinged| pinged.target.as_str()).collect()
+fn pinged(pass: &Pass) -> Vec<&str> {
+  pass.attempts.iter().map(|pinged| pinged.target_name.as_str()).collect()
 }
 
 fn failed(code: &str) -> (Outcome, Option<&str>) {
@@ -179,51 +193,49 @@ fn outcome_of(attempt: &Attempt) -> (Outcome, Option<&str>) {
 #[tokio::test]
 async fn a_stopped_round_pings_nothing_and_leaves_records_still() {
   let bench = bench().await;
-  bench.register("line", line("worker")).await;
-  bench.store.set_round_stopped(true).await.expect("the round stops");
+  bench.register("line", line("session")).await;
+  stop(&bench.store).await;
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert!(report.stopped);
-  assert!(report.attempts.is_empty());
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert!(pass.stopped);
+  assert_eq!(pass.pinged_count, 0);
   assert!(bench.heard().is_empty());
-  let target = bench.store.target("agency", "line").await.expect("the target").expect("it stands");
-  assert_eq!(target.last_attempt, None);
+  assert_eq!(bench.store.target("alpha", "line").await.unwrap().unwrap().last_attempt, None);
 }
 
 #[tokio::test]
 async fn due_targets_are_pinged_in_rank_order_with_their_ping() {
   let bench = bench().await;
-  bench.store.put_group("agency", "opus", 1).await.expect("a group");
-  bench.register("b", line("worker")).await;
+  bench.store.put_group("alpha", "large", 1).await.expect("a group");
+  bench.register("b", line("session")).await;
   bench.register("a", line("other")).await;
-  bench.register("place", place("owner", "opus")).await;
+  bench.register("seat", place("holder", "large")).await;
   bench.register("fresh", used(line("fresh"), NOW - MINUTE)).await;
   let mut off = line("quiet");
   off.warm_by_default = None;
   bench.register("off", off).await;
+  bench.register("used", used(line("used"), NOW - IDLE - MINUTE)).await;
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert!(!report.stopped);
-  assert_eq!(pinged(&report), vec!["place", "a", "b"]);
-  assert!(report.attempts.iter().all(|pinged| pinged.attempt
-    == Attempt {
-      at: NOW,
-      outcome: Outcome::Warmed,
-      code: None,
-      reason: None,
-    }));
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert!(!pass.stopped);
+  assert_eq!(pinged(&pass), vec!["seat", "a", "b", "used"]);
+  assert_eq!(pass.pinged_count, 4);
+  assert!(pass.attempts.iter().all(|pinged| pinged.at == NOW && pinged.code.is_none()));
 
   let heard = bench.consumer.heard.lock().expect("the log of pings").clone();
   assert_eq!(
     heard[0],
     json!({
-      "consumer": "agency",
-      "target": "place",
-      "kind": "pool_place",
-      "subject": "owner",
-      "bound_ms": 120_000,
+      "consumerName": "alpha",
+      "targetName": "seat",
+      "subjectName": "holder",
+      "kind": "pool-place",
+      "dueAt": NOW,
+      "boundMs": 120_000,
     })
   );
+  // A target used before is due an idle stretch after its use.
+  assert_eq!(heard[3]["dueAt"], NOW - MINUTE);
 }
 
 #[tokio::test]
@@ -232,12 +244,14 @@ async fn only_a_warmed_answer_restarts_the_clock() {
   bench.register("warmed", line("a")).await;
   bench.register("busy", line("b")).await;
   bench.register("skipped", line("c")).await;
+  bench.register("said", line("d")).await;
   bench.answer("busy", json!({ "outcome": "busy", "code": "ignored", "reason": "Ignored." }));
-  bench.answer("skipped", json!({ "outcome": "skipped", "code": "provider_off" }));
-  let warmer = bench.warmer();
+  bench.answer("skipped", json!({ "outcome": "skipped", "code": "provider-off" }));
+  bench.answer("said", json!({ "outcome": "warmed" }));
+  let warmer = bench.warmer().await;
 
   warmer.pass(None).await.expect("a pass");
-  assert_eq!(bench.heard(), vec!["busy", "skipped", "warmed"]);
+  assert_eq!(bench.heard(), vec!["busy", "said", "skipped", "warmed"]);
   assert_eq!(
     bench.last("busy").await,
     Attempt {
@@ -247,9 +261,12 @@ async fn only_a_warmed_answer_restarts_the_clock() {
       reason: None,
     }
   );
-  assert_eq!(outcome_of(&bench.last("skipped").await), (Outcome::Skipped, Some("provider_off")));
-  let warmed = bench.store.target("agency", "warmed").await.expect("the target").expect("it stands");
-  assert_eq!(warmed.record.last_warmed_at, Some(NOW));
+  assert_eq!(outcome_of(&bench.last("skipped").await), (Outcome::Skipped, Some("provider-off")));
+  // A 204 and a 200 saying warmed are the same answer.
+  for name in ["warmed", "said"] {
+    let warmed = bench.store.target("alpha", name).await.expect("the target").expect("it stands");
+    assert_eq!(warmed.record.last_warmed_at, Some(NOW), "{name}");
+  }
 
   bench.clock.advance(MINUTE);
   warmer.pass(None).await.expect("a pass");
@@ -257,56 +274,56 @@ async fn only_a_warmed_answer_restarts_the_clock() {
 
   bench.clock.advance(IDLE);
   warmer.pass(None).await.expect("a pass");
-  assert_eq!(bench.heard(), vec!["busy", "skipped", "warmed"]);
+  assert_eq!(bench.heard(), vec!["busy", "said", "skipped", "warmed"]);
 }
 
 #[tokio::test]
 async fn a_failure_touches_only_where_registered() {
   let bench = bench().await;
-  bench.store.put_group("agency", "opus", 5).await.expect("a group");
-  bench.register("line", line("worker")).await;
-  bench.register("place", place("owner", "opus")).await;
+  bench.store.put_group("alpha", "large", 5).await.expect("a group");
+  bench.register("line", line("session")).await;
+  bench.register("seat", place("holder", "large")).await;
   let refusal =
-    json!({ "outcome": "failed", "code": "launch_failed", "reason": "The line did not launch." });
+    json!({ "outcome": "failed", "code": "launch-failed", "reason": "The line did not launch." });
   bench.answer("line", refusal.clone());
-  bench.answer("place", refusal);
-  let warmer = bench.warmer();
+  bench.answer("seat", refusal);
+  let warmer = bench.warmer().await;
 
   warmer.pass(None).await.expect("a pass");
-  assert_eq!(bench.heard(), vec!["place", "line"]);
-  for name in ["line", "place"] {
-    let target = bench.store.target("agency", name).await.expect("the target").expect("it stands");
+  assert_eq!(bench.heard(), vec!["seat", "line"]);
+  for name in ["line", "seat"] {
+    let target = bench.store.target("alpha", name).await.expect("the target").expect("it stands");
     assert_eq!(target.record.last_failed_at, Some(NOW));
     assert_eq!(target.record.last_warmed_at, None);
     let attempt = target.last_attempt.expect("an attempt");
-    assert_eq!(outcome_of(&attempt), failed("launch_failed"));
+    assert_eq!(outcome_of(&attempt), failed("launch-failed"));
     assert_eq!(attempt.reason.as_deref(), Some("The line did not launch."));
   }
 
   bench.clock.advance(MINUTE);
   warmer.pass(None).await.expect("a pass");
-  assert_eq!(bench.heard(), vec!["place"]);
+  assert_eq!(bench.heard(), vec!["seat"]);
 }
 
 #[tokio::test]
 async fn a_hook_that_answers_wrongly_is_recorded_as_failed_with_the_warmers_code() {
   let bench = bench().await;
   let cases: [(&str, Reply, &str); 8] = [
-    ("status", Reply::Status(500), "hook_status"),
-    ("created", Reply::Status(201), "hook_status"),
-    ("redirected", Reply::Redirect, "hook_status"),
-    ("garbage", Reply::Body("not an answer"), "hook_answer"),
-    ("unknown", Reply::Answer(json!({ "outcome": "cooled" })), "hook_answer"),
-    ("codeless", Reply::Answer(json!({ "outcome": "skipped" })), "hook_answer"),
+    ("status", Reply::Status(500), "hook-status"),
+    ("created", Reply::Status(201), "hook-status"),
+    ("redirected", Reply::Redirect, "hook-status"),
+    ("garbage", Reply::Body("not an answer"), "hook-answer"),
+    ("unknown", Reply::Answer(json!({ "outcome": "cooled" })), "hook-answer"),
+    ("codeless", Reply::Answer(json!({ "outcome": "skipped" })), "hook-answer"),
     (
       "reasonless",
       Reply::Answer(json!({ "outcome": "failed", "code": "broke" })),
-      "hook_answer",
+      "hook-answer",
     ),
     (
       "misshapen",
-      Reply::Answer(json!({ "outcome": "failed", "code": "Broke", "reason": "It broke." })),
-      "hook_answer",
+      Reply::Answer(json!({ "outcome": "failed", "code": "broke_down", "reason": "It broke." })),
+      "hook-answer",
     ),
   ];
   for (name, reply, _) in &cases {
@@ -314,8 +331,8 @@ async fn a_hook_that_answers_wrongly_is_recorded_as_failed_with_the_warmers_code
     bench.script(name, Vec::new(), reply.clone());
   }
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert_eq!(report.attempts.len(), cases.len());
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert_eq!(pass.attempts.len(), cases.len());
   for (name, _, code) in &cases {
     let attempt = bench.last(name).await;
     assert_eq!(outcome_of(&attempt), failed(code), "{name}");
@@ -330,13 +347,13 @@ async fn a_hook_nobody_listens_on_is_unreachable() {
   let closed = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
   let hook_url = format!("http://{}/ping", closed.local_addr().expect("the port's address"));
   drop(closed);
-  bench.store.put_consumer("gone", &hook_url).await.expect("a consumer");
-  bench.store.put_target("gone", "line", &line("worker")).await.expect("a target");
+  bench.store.put_consumer("gone", &hook_url, NOW).await.expect("a consumer");
+  bench.store.put_target("gone", "line", &line("session")).await.expect("a target");
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert_eq!(pinged(&report), vec!["line"]);
-  assert_eq!(outcome_of(&report.attempts[0].attempt), failed("hook_unreachable"));
-  assert_eq!(report.attempts[0].consumer, "gone");
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert_eq!(pinged(&pass), vec!["line"]);
+  assert_eq!(pass.attempts[0].code.as_deref(), Some("hook-unreachable"));
+  assert_eq!(pass.attempts[0].consumer_name, "gone");
 }
 
 #[tokio::test]
@@ -350,22 +367,21 @@ async fn a_hook_silent_past_its_bound_times_out_and_the_pass_goes_on() {
   let mut policy = Policy::builtin().expect("the built-in policy");
   policy.ping_slack_seconds = 0;
 
-  let report = bench.warmer_with(policy).pass(None).await.expect("a pass");
-  assert_eq!(pinged(&report), vec!["silent", "then"]);
-  let attempt = &report.attempts[0].attempt;
-  assert_eq!(outcome_of(attempt), failed("hook_timeout"));
-  assert_eq!(attempt.reason.as_deref(), Some("The hook did not answer within 1 ms."));
-  assert_eq!(report.attempts[1].attempt.outcome, Outcome::Warmed);
+  let pass = bench.warmer_with(policy).await.pass(None).await.expect("a pass");
+  assert_eq!(pinged(&pass), vec!["silent", "then"]);
+  assert_eq!(pass.attempts[0].code.as_deref(), Some("hook-timeout"));
+  assert_eq!(pass.attempts[0].reason.as_deref(), Some("The hook did not answer within 1 ms."));
+  assert_eq!(bench.last("then").await.outcome, Outcome::Warmed);
 }
 
 #[tokio::test]
 async fn an_attempt_is_timed_when_its_answer_arrives() {
   let bench = bench().await;
-  bench.register("line", line("worker")).await;
-  bench.script("line", vec![Act::Advance(5_000)], Reply::Answer(json!({ "outcome": "warmed" })));
+  bench.register("line", line("session")).await;
+  bench.script("line", vec![Act::Advance(5_000)], Reply::Status(204));
 
-  bench.warmer().pass(None).await.expect("a pass");
-  let target = bench.store.target("agency", "line").await.expect("the target").expect("it stands");
+  bench.warmer().await.pass(None).await.expect("a pass");
+  let target = bench.store.target("alpha", "line").await.expect("the target").expect("it stands");
   assert_eq!(target.record.last_warmed_at, Some(NOW + 5_000));
   assert_eq!(target.last_attempt.map(|attempt| attempt.at), Some(NOW + 5_000));
 }
@@ -373,29 +389,25 @@ async fn an_attempt_is_timed_when_its_answer_arrives() {
 #[tokio::test]
 async fn a_target_turned_off_or_retired_mid_pass_is_passed_over_and_not_replaced() {
   let bench = bench().await;
-  bench.store.put_group("agency", "opus", 1).await.expect("a group");
+  bench.store.put_group("alpha", "large", 1).await.expect("a group");
   let mut lead = line("lead");
   lead.rank = 1;
   bench.register("lead", lead).await;
-  bench.register("oldest", used(place("owner", "opus"), NOW - 45 * MINUTE)).await;
-  bench.register("spare", used(place("spare", "opus"), NOW - 41 * MINUTE)).await;
+  bench.register("oldest", used(place("holder", "large"), NOW - 45 * MINUTE)).await;
+  bench.register("spare", used(place("spare", "large"), NOW - 41 * MINUTE)).await;
   let mut gone = line("gone");
   gone.rank = 60;
   bench.register("gone", gone).await;
   let mut tail = line("tail");
   tail.rank = 70;
   bench.register("tail", tail).await;
-  bench.script(
-    "lead",
-    vec![Act::SwitchOff("owner"), Act::Retire("gone")],
-    Reply::Answer(json!({ "outcome": "warmed" })),
-  );
+  bench.script("lead", vec![Act::SwitchOff("holder"), Act::Retire("gone")], Reply::Status(204));
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert!(!report.stopped);
-  assert_eq!(pinged(&report), vec!["lead", "tail"]);
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert!(!pass.stopped);
+  assert_eq!(pinged(&pass), vec!["lead", "tail"]);
   assert_eq!(bench.heard(), vec!["lead", "tail"]);
-  let oldest = bench.store.target("agency", "oldest").await.expect("the target").expect("it stands");
+  let oldest = bench.store.target("alpha", "oldest").await.expect("the target").expect("it stands");
   assert_eq!(oldest.last_attempt, None);
 }
 
@@ -404,96 +416,129 @@ async fn a_round_stopped_mid_pass_ends_the_pass() {
   let bench = bench().await;
   bench.register("a", line("a")).await;
   bench.register("b", line("b")).await;
-  bench.script("a", vec![Act::StopRound], Reply::Answer(json!({ "outcome": "warmed" })));
+  bench.script("a", vec![Act::StopRound], Reply::Status(204));
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert!(report.stopped);
-  assert_eq!(pinged(&report), vec!["a"]);
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert!(pass.stopped);
+  assert_eq!(pinged(&pass), vec!["a"]);
   assert_eq!(bench.heard(), vec!["a"]);
+}
+
+#[tokio::test]
+async fn a_pause_holds_until_its_end_and_then_the_target_warms_again() {
+  let bench = bench().await;
+  bench.register("line", line("session")).await;
+  let pause = SubjectChange {
+    pause: Some(Some(Pause {
+      at: NOW,
+      until: NOW + MINUTE,
+    })),
+    ..SubjectChange::default()
+  };
+  bench.store.change_subject("alpha", "session", pause).await.expect("a pause");
+  let warmer = bench.warmer().await;
+
+  assert!(warmer.pass(None).await.expect("a pass").attempts.is_empty());
+  bench.clock.advance(MINUTE);
+  assert_eq!(pinged(&warmer.pass(None).await.expect("a pass")), vec!["line"]);
 }
 
 #[tokio::test]
 async fn a_group_pings_its_oldest_up_to_its_limit() {
   let bench = bench().await;
-  bench.store.put_group("agency", "opus", 2).await.expect("a group");
-  bench.register("p1", used(place("one", "opus"), NOW - 45 * MINUTE)).await;
-  bench.register("p2", used(place("two", "opus"), NOW - 50 * MINUTE)).await;
-  bench.register("p3", place("three", "opus")).await;
+  bench.store.put_group("alpha", "large", 2).await.expect("a group");
+  bench.register("p1", used(place("one", "large"), NOW - 45 * MINUTE)).await;
+  bench.register("p2", used(place("two", "large"), NOW - 50 * MINUTE)).await;
+  bench.register("p3", place("three", "large")).await;
 
-  let report = bench.warmer().pass(None).await.expect("a pass");
-  assert_eq!(pinged(&report), vec!["p3", "p2"]);
+  let pass = bench.warmer().await.pass(None).await.expect("a pass");
+  assert_eq!(pinged(&pass), vec!["p3", "p2"]);
 }
 
 #[tokio::test]
 async fn an_idle_override_reaches_only_targets_that_honour_it() {
   let bench = bench().await;
-  bench.store.put_group("agency", "opus", 5).await.expect("a group");
-  bench.register("line", used(line("worker"), NOW - 10 * MINUTE)).await;
-  bench.register("place", used(place("owner", "opus"), NOW - 10 * MINUTE)).await;
-  let warmer = bench.warmer();
+  bench.store.put_group("alpha", "large", 5).await.expect("a group");
+  bench.register("line", used(line("session"), NOW - 10 * MINUTE)).await;
+  bench.register("seat", used(place("holder", "large"), NOW - 10 * MINUTE)).await;
+  let warmer = bench.warmer().await;
 
   assert!(warmer.pass(None).await.expect("a pass").attempts.is_empty());
-  let report = warmer.pass(Some(5 * MINUTE)).await.expect("a pass");
-  assert_eq!(pinged(&report), vec!["line"]);
+  let pass = warmer.pass(Some(5 * MINUTE)).await.expect("a pass");
+  assert_eq!(pinged(&pass), vec!["line"]);
 }
 
 #[tokio::test]
 async fn a_long_reason_is_cut_to_the_policys_units() {
   let bench = bench().await;
-  bench.register("line", line("worker")).await;
+  bench.register("line", line("session")).await;
   bench.answer("line", json!({ "outcome": "failed", "reason": "The line did not launch." }));
   let mut policy = Policy::builtin().expect("the built-in policy");
   policy.reason_units = 8;
 
-  let report = bench.warmer_with(policy).pass(None).await.expect("a pass");
-  assert_eq!(report.attempts[0].attempt.reason.as_deref(), Some("The line"));
+  let pass = bench.warmer_with(policy).await.pass(None).await.expect("a pass");
+  assert_eq!(pass.attempts[0].reason.as_deref(), Some("The line"));
   assert_eq!(bench.last("line").await.reason.as_deref(), Some("The line"));
   assert_eq!(bench.last("line").await.code, None);
 }
 
 #[tokio::test]
-async fn a_pass_ends_by_pruning_the_log_to_its_days() {
+async fn a_pass_publishes_each_attempt_and_itself() {
   let bench = bench().await;
-  bench.register("line", line("worker")).await;
-  let old = Attempt {
-    at: NOW - 2 * DAY,
-    outcome: Outcome::Busy,
-    code: None,
-    reason: None,
-  };
-  bench.store.record_attempt("agency", "line", &old).await.expect("an old attempt");
-  let mut policy = Policy::builtin().expect("the built-in policy");
-  policy.log_days = 1;
+  bench.register("a", line("a")).await;
+  bench.register("b", line("b")).await;
+  let warmer = bench.warmer().await;
+  let mut published = warmer.published();
 
-  bench.warmer_with(policy).pass(None).await.expect("a pass");
-  let log = bench.store.attempts("agency", "line").await.expect("the log");
-  assert_eq!(log.iter().map(|attempt| attempt.at).collect::<Vec<_>>(), vec![NOW]);
+  let pass = warmer.pass(None).await.expect("a pass");
+  let events = bench.store.events(0, &[], 10).await.expect("the window").items;
+  let kinds: Vec<&str> = events.iter().map(|event| event.kind.as_str()).collect();
+  assert_eq!(kinds, ["target.changed", "target.changed", "pass.created"]);
+  let first: Value = serde_json::from_str(&events[0].data).unwrap();
+  assert_eq!((first["name"].as_str(), first["warmedAt"].as_i64()), (Some("a"), Some(NOW)));
+  let last: Value = serde_json::from_str(&events[2].data).unwrap();
+  assert_eq!(last, serde_json::to_value(&pass).unwrap());
+  assert!(published.has_changed().unwrap());
+  assert_eq!(*published.borrow_and_update(), events[2].id);
 }
 
 #[tokio::test]
-async fn a_pass_that_finds_the_round_stopped_still_prunes_the_log() {
-  let bench = bench().await;
-  bench.register("line", line("worker")).await;
-  let old = Attempt {
-    at: NOW - 2 * DAY,
-    outcome: Outcome::Busy,
-    code: None,
-    reason: None,
-  };
-  bench.store.record_attempt("agency", "line", &old).await.expect("an old attempt");
-  bench.store.set_round_stopped(true).await.expect("the round stops");
-  let mut policy = Policy::builtin().expect("the built-in policy");
-  policy.log_days = 1;
+async fn a_pass_ends_by_pruning_the_log_and_the_window_to_their_days_even_when_stopped() {
+  for stopped in [false, true] {
+    let bench = bench().await;
+    bench.register("line", line("session")).await;
+    let old = Attempt {
+      at: NOW - 2 * DAY,
+      outcome: Outcome::Busy,
+      code: None,
+      reason: None,
+    };
+    bench.store.record_attempt("alpha", "line", &old).await.expect("an old attempt");
+    bench
+      .store
+      .append_event("round.changed", NOW - 2 * DAY, "{}")
+      .await
+      .expect("an old event");
+    if stopped {
+      stop(&bench.store).await;
+    }
+    let mut policy = Policy::builtin().expect("the built-in policy");
+    policy.log_days = 1;
+    policy.event_days = 1;
 
-  let report = bench.warmer_with(policy).pass(None).await.expect("a pass");
-  assert!(report.stopped);
-  assert!(bench.store.attempts("agency", "line").await.expect("the log").is_empty());
+    bench.warmer_with(policy).await.pass(None).await.expect("a pass");
+    let log = bench.store.attempts("alpha", "line").await.expect("the log");
+    let expected: &[i64] = if stopped { &[] } else { &[NOW] };
+    assert_eq!(log.iter().map(|attempt| attempt.at).collect::<Vec<_>>(), expected);
+    let window = bench.store.events(0, &[], 10).await.expect("the window").items;
+    assert!(window.iter().all(|event| event.at == NOW), "stopped: {stopped}");
+  }
 }
 
 #[tokio::test]
 async fn a_pass_asked_for_while_one_runs_is_refused_and_a_waiting_one_runs_after() {
   let bench = bench().await;
-  bench.register("line", line("worker")).await;
+  bench.register("line", line("session")).await;
   let (arrived, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
   bench.script(
     "line",
@@ -503,7 +548,7 @@ async fn a_pass_asked_for_while_one_runs_is_refused_and_a_waiting_one_runs_after
       release: release.clone(),
     },
   );
-  let warmer = Arc::new(bench.warmer());
+  let warmer = Arc::new(bench.warmer().await);
 
   let running = tokio::spawn({
     let warmer = warmer.clone();

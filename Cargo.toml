@@ -1,30 +1,37 @@
-# The service as one package at the root: the library and the binary that serves it. The repository
-# checks and the service's tests live in `tests/`.
+# The service as one package at the root: the schedule library, the service with its client, its OpenAPI
+# document and the harness plugin's MCP server, and the one binary that serves, answers the plugin and takes
+# snapshots. The repository checks and the service's tests live in `tests/`.
 [package]
 name = "bmo-cache-warmer"
 description = "A keepalive scheduler: keeps registered prompt-cache prefixes warm by asking their consumers to ping them."
-version = "0.1.0-rev.2"
+version = "0.1.0-rev.3"
 edition = "2024"
 publish = false
 
 [dependencies]
+# The service's routes and its event stream.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
-# The due rule and the plan: bmo-agency's keepalive schedule library, held to one commit. Agency's
-# repository has no remote, so its local checkout is named by its file URL.
-cache-warmer = { git = "https://github.com/ahas/bmo-agency", rev = "1fe08ba74525daf993e0e9e2dffc08682faa2d82" }
 clap = { version = "4.6.7", features = ["derive", "env"] }
+# The event stream's body.
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+# The pings to consumers' hooks and the client's calls to the service.
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+# The harness plugin's MCP server.
+rmcp = { version = "3.5.0", default-features = false, features = ["server", "transport-io"] }
+# The JSON Schemas of the bodies, the tools' inputs and outputs and the OpenAPI document.
+schemars = "1.2.3"
 sea-orm = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-sqlite"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.138"
+# The OpenAPI document keeps its keys in the order the code writes them.
+serde_json = { version = "1.0.138", features = ["preserve_order"] }
 sha2 = "0.10.9"
 sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1.53.2", features = ["io-std", "macros", "net", "rt", "sync", "time"] }
 toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
 # The tests serve the router and a fake consumer on loopback, and drive the ticker on a paused clock.
 tempfile = "3.27.0"
-tokio = { version = "1.53.2", features = ["macros", "net", "rt", "sync", "test-util", "time"] }
+tokio = { version = "1.53.2", features = ["io-std", "macros", "net", "rt", "sync", "test-util", "time"] }

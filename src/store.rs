@@ -1,10 +1,9 @@
 //! What the warmer keeps between passes and restarts (docs/store.md): consumers, groups, subjects,
-//! targets with their records, the attempt log and the round, in one SQLite file. Every time it writes
-//! is handed in by the caller.
+//! targets with their records, the attempt log, the event window and the round, in one SQLite file.
+//! Every time it writes is handed in by the caller.
 
 use std::path::Path;
 
-use cache_warmer::{Candidate, Clocks, Group, Record};
 use sea_orm::{
   ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryResult, RuntimeErr,
   SqlxSqliteConnector, Statement, TransactionTrait, Value,
@@ -12,6 +11,7 @@ use sea_orm::{
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::migration::{Migrator, MigratorTrait};
+use crate::schedule::{Candidate, Clocks, Group as PlannedGroup, Record, is_on};
 
 /// The store, open and migrated.
 #[derive(Clone)]
@@ -69,13 +69,48 @@ pub struct Attempt {
   pub reason: Option<String>,
 }
 
-/// What a registration declares.
+/// A page of rows read by id: the rows and whether more stand past the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rows<T> {
+  pub items: Vec<T>,
+  pub more: bool,
+}
+
+/// Where a page starts and how long it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Paging {
+  /// The id of the last row read; the page starts past it.
+  pub after: i64,
+  pub limit: u32,
+}
+
+/// A consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consumer {
+  pub id: i64,
+  pub name: String,
+  pub url: String,
+  pub created_at: i64,
+}
+
+/// A group, with the targets that name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+  pub id: i64,
+  pub consumer: String,
+  pub name: String,
+  pub limit: i64,
+  pub target_names: Vec<String>,
+}
+
+/// What a registration declares, every value filled in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
-  pub kind: String,
-  pub label: String,
+  pub kind: Option<String>,
+  pub label: Option<String>,
   pub subject: String,
   pub rank: i64,
+  /// Its clocks, a lifetime always declared.
   pub clocks: Clocks,
   pub ping_bound_ms: i64,
   pub group: Option<String>,
@@ -84,25 +119,40 @@ pub struct Registration {
   pub last_used_at: Option<i64>,
 }
 
+/// A pause as it is kept: when it was set and when it ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pause {
+  pub at: i64,
+  pub until: i64,
+}
+
+impl Pause {
+  /// Whether the pause still stands at `now`.
+  pub fn stands(self, now: i64) -> bool {
+    now < self.until
+  }
+}
+
 /// A registered target with its record and its subject's switches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
+  pub id: i64,
   pub consumer: String,
   pub name: String,
-  pub kind: String,
-  pub label: String,
+  pub kind: Option<String>,
+  pub label: Option<String>,
   pub subject: String,
   pub rank: i64,
   pub clocks: Clocks,
   pub ping_bound_ms: i64,
   /// The group it is in, with that group's limit.
-  pub group: Option<Group>,
+  pub group: Option<PlannedGroup>,
   /// As registered; none where the registration said nothing.
   pub warm_by_default: Option<bool>,
   /// Its subject's switch; none while unset.
   pub switch: Option<bool>,
-  /// When its subject was paused, while that stands.
-  pub paused_at: Option<i64>,
+  /// Its subject's pause, as kept; it may have run out.
+  pub pause: Option<Pause>,
   pub record: Record,
   pub last_attempt: Option<Attempt>,
 }
@@ -110,21 +160,60 @@ pub struct Target {
 /// A subject of a consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Subject {
-  pub subject: String,
+  pub id: i64,
+  pub consumer: String,
+  pub name: String,
   pub switch: Option<bool>,
-  pub paused_at: Option<i64>,
+  /// Its pause, as kept; it may have run out.
+  pub pause: Option<Pause>,
   /// How many targets name it.
   pub targets: i64,
+}
+
+/// What a change of a subject sets: each field given sets its part, `None` inside unsetting it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SubjectChange {
+  pub switch: Option<Option<bool>>,
+  pub pause: Option<Option<Pause>>,
+}
+
+/// The round as it is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Round {
+  pub stopped: bool,
+  /// The interval set; none while the policy's tick stands.
+  pub interval_ms: Option<i64>,
+}
+
+/// What a change of the round sets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoundChange {
+  pub stopped: Option<bool>,
+  pub interval_ms: Option<Option<i64>>,
+}
+
+/// One event in the window, its member kept as JSON text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredEvent {
+  pub id: i64,
+  pub kind: String,
+  pub at: i64,
+  pub data: String,
 }
 
 impl Target {
   /// Whether it warms, given the policy's default for a registration that says nothing.
   pub fn on(&self, policy_default: bool) -> bool {
-    cache_warmer::is_on(self.switch, self.warm_by_default, policy_default)
+    is_on(self.switch, self.warm_by_default, policy_default)
   }
 
-  /// The target as a pass judges it.
-  pub fn candidate(&self, policy_default: bool) -> Candidate {
+  /// Its subject's pause, where it stands at `now`.
+  pub fn pause_at(&self, now: i64) -> Option<Pause> {
+    self.pause.filter(|pause| pause.stands(now))
+  }
+
+  /// The target as a pass judges it at `now`.
+  pub fn candidate(&self, policy_default: bool, now: i64) -> Candidate {
     Candidate {
       consumer: self.consumer.clone(),
       target: self.name.clone(),
@@ -133,7 +222,7 @@ impl Target {
       clocks: self.clocks.clone(),
       record: self.record.clone(),
       on: self.on(policy_default),
-      paused: self.paused_at.is_some(),
+      paused: self.pause_at(now).is_some(),
     }
   }
 }
@@ -142,23 +231,53 @@ fn statement(sql: &str, values: impl IntoIterator<Item = Value>) -> Statement {
   Statement::from_sql_and_values(DbBackend::Sqlite, sql, values)
 }
 
-/// A target's columns, its group's limit and its subject's switches, in the order the pass walks them.
+/// The rows of a page read with one row more than its limit, and whether that row came.
+fn paged<T>(mut items: Vec<T>, limit: u32) -> Rows<T> {
+  let limit = limit as usize;
+  let more = items.len() > limit;
+  items.truncate(limit);
+
+  Rows { items, more }
+}
+
+/// A target's columns, its group's limit and its subject's switches.
 const TARGETS: &str = r#"
-  SELECT t."consumer", t."name", t."kind", t."label", t."subject", t."rank", t."idle_ms", t."lifetime_ms",
-         t."margin_ms", t."ping_bound_ms", t."group", g."limit" AS "group_limit", t."warm_by_default",
-         t."failure_touches", t."honours_idle_override", t."last_used_at", t."last_warmed_at",
-         t."last_failed_at", t."attempt_at", t."attempt_outcome", t."attempt_code", t."attempt_reason",
-         s."switch", s."paused_at"
+  SELECT t."id", t."consumer", t."name", t."kind", t."label", t."subject", t."rank", t."idle_ms",
+         t."lifetime_ms", t."margin_ms", t."ping_bound_ms", t."group", g."limit" AS "group_limit",
+         t."warm_by_default", t."failure_touches", t."honours_idle_override", t."last_used_at",
+         t."last_warmed_at", t."last_failed_at", t."attempt_at", t."attempt_outcome", t."attempt_code",
+         t."attempt_reason", s."switch", s."paused_at", s."paused_until"
   FROM "targets" t
   JOIN "subjects" s ON s."consumer" = t."consumer" AND s."name" = t."subject"
   LEFT JOIN "groups" g ON g."consumer" = t."consumer" AND g."name" = t."group"
 "#;
 
-const ORDER: &str = r#" ORDER BY t."rank", t."consumer", t."name""#;
+/// A subject's columns and how many targets name it.
+const SUBJECTS: &str = r#"
+  SELECT s."id", s."consumer", s."name", s."switch", s."paused_at", s."paused_until",
+         (SELECT COUNT(*) FROM "targets" t WHERE t."consumer" = s."consumer" AND t."subject" = s."name") AS "targets"
+  FROM "subjects" s
+"#;
+
+fn pause_of(row: &QueryResult) -> Result<Option<Pause>, DbErr> {
+  Ok(
+    match (
+      row.try_get::<Option<i64>>("", "paused_at")?,
+      row.try_get::<Option<i64>>("", "paused_until")?,
+    ) {
+      (Some(at), Some(until)) => Some(Pause { at, until }),
+      _ => None,
+    },
+  )
+}
+
+fn outcome_of(word: &str) -> Result<Outcome, DbErr> {
+  Outcome::parse(word).ok_or_else(|| DbErr::Type(format!("an attempt's outcome reads {word}")))
+}
 
 fn target_of(row: &QueryResult) -> Result<Target, DbErr> {
   let group = match row.try_get::<Option<String>>("", "group")? {
-    Some(name) => Some(Group {
+    Some(name) => Some(PlannedGroup {
       name,
       limit: usize::try_from(row.try_get::<i64>("", "group_limit")?).unwrap_or(0),
     }),
@@ -170,8 +289,7 @@ fn target_of(row: &QueryResult) -> Result<Target, DbErr> {
   ) {
     (Some(at), Some(outcome)) => Some(Attempt {
       at,
-      outcome: Outcome::parse(&outcome)
-        .ok_or_else(|| DbErr::Type(format!("an attempt's outcome reads {outcome}")))?,
+      outcome: outcome_of(&outcome)?,
       code: row.try_get("", "attempt_code")?,
       reason: row.try_get("", "attempt_reason")?,
     }),
@@ -179,6 +297,7 @@ fn target_of(row: &QueryResult) -> Result<Target, DbErr> {
   };
 
   Ok(Target {
+    id: row.try_get("", "id")?,
     consumer: row.try_get("", "consumer")?,
     name: row.try_get("", "name")?,
     kind: row.try_get("", "kind")?,
@@ -187,7 +306,7 @@ fn target_of(row: &QueryResult) -> Result<Target, DbErr> {
     rank: row.try_get("", "rank")?,
     clocks: Clocks {
       idle_ms: row.try_get("", "idle_ms")?,
-      lifetime_ms: row.try_get("", "lifetime_ms")?,
+      lifetime_ms: Some(row.try_get("", "lifetime_ms")?),
       margin_ms: row.try_get("", "margin_ms")?,
       failure_touches: row.try_get("", "failure_touches")?,
       honours_idle_override: row.try_get("", "honours_idle_override")?,
@@ -196,7 +315,7 @@ fn target_of(row: &QueryResult) -> Result<Target, DbErr> {
     group,
     warm_by_default: row.try_get("", "warm_by_default")?,
     switch: row.try_get("", "switch")?,
-    paused_at: row.try_get("", "paused_at")?,
+    pause: pause_of(row)?,
     record: Record {
       last_used_at: row.try_get("", "last_used_at")?,
       last_warmed_at: row.try_get("", "last_warmed_at")?,
@@ -206,12 +325,47 @@ fn target_of(row: &QueryResult) -> Result<Target, DbErr> {
   })
 }
 
+fn subject_of(row: &QueryResult) -> Result<Subject, DbErr> {
+  Ok(Subject {
+    id: row.try_get("", "id")?,
+    consumer: row.try_get("", "consumer")?,
+    name: row.try_get("", "name")?,
+    switch: row.try_get("", "switch")?,
+    pause: pause_of(row)?,
+    targets: row.try_get("", "targets")?,
+  })
+}
+
+fn consumer_of(row: &QueryResult) -> Result<Consumer, DbErr> {
+  Ok(Consumer {
+    id: row.try_get("", "id")?,
+    name: row.try_get("", "name")?,
+    url: row.try_get("", "url")?,
+    created_at: row.try_get("", "created_at")?,
+  })
+}
+
+fn event_of(row: &QueryResult) -> Result<StoredEvent, DbErr> {
+  Ok(StoredEvent {
+    id: row.try_get("", "id")?,
+    kind: row.try_get("", "kind")?,
+    at: row.try_get("", "at")?,
+    data: row.try_get("", "data")?,
+  })
+}
+
 async fn exists(db: &impl ConnectionTrait, sql: &str, values: Vec<Value>) -> Result<bool, DbErr> {
   Ok(db.query_one(statement(sql, values)).await?.is_some())
 }
 
 async fn consumer_exists(db: &impl ConnectionTrait, consumer: &str) -> Result<bool, DbErr> {
   exists(db, r#"SELECT 1 FROM "consumers" WHERE "name" = ?1"#, vec![consumer.into()]).await
+}
+
+async fn group_exists(db: &impl ConnectionTrait, consumer: &str, group: &str) -> Result<bool, DbErr> {
+  let key = vec![consumer.into(), group.into()];
+
+  exists(db, r#"SELECT 1 FROM "groups" WHERE "consumer" = ?1 AND "name" = ?2"#, key).await
 }
 
 /// Makes a subject where none stands yet.
@@ -224,26 +378,38 @@ async fn ensure_subject(db: &impl ConnectionTrait, consumer: &str, subject: &str
   .map(drop)
 }
 
-async fn subject_of(db: &impl ConnectionTrait, consumer: &str, subject: &str) -> Result<Subject, DbErr> {
+async fn one_subject(db: &impl ConnectionTrait, consumer: &str, subject: &str) -> Result<Subject, DbErr> {
+  let sql = format!(r#"{SUBJECTS} WHERE s."consumer" = ?1 AND s."name" = ?2"#);
   let row = db
-    .query_one(statement(
-      r#"SELECT s."name", s."switch", s."paused_at",
-                (SELECT COUNT(*) FROM "targets" t WHERE t."consumer" = s."consumer" AND t."subject" = s."name") AS "targets"
-         FROM "subjects" s WHERE s."consumer" = ?1 AND s."name" = ?2"#,
-      [consumer.into(), subject.into()],
-    ))
+    .query_one(statement(&sql, [consumer.into(), subject.into()]))
     .await?
     .ok_or_else(|| DbErr::RecordNotFound(format!("the subject {subject}")))?;
 
-  subject_row(&row)
+  subject_of(&row)
 }
 
-fn subject_row(row: &QueryResult) -> Result<Subject, DbErr> {
-  Ok(Subject {
-    subject: row.try_get("", "name")?,
-    switch: row.try_get("", "switch")?,
-    paused_at: row.try_get("", "paused_at")?,
-    targets: row.try_get("", "targets")?,
+async fn one_group(db: &impl ConnectionTrait, consumer: &str, group: &str) -> Result<Group, DbErr> {
+  let key = || [consumer.into(), group.into()];
+  let row = db
+    .query_one(statement(
+      r#"SELECT "id", "limit" FROM "groups" WHERE "consumer" = ?1 AND "name" = ?2"#,
+      key(),
+    ))
+    .await?
+    .ok_or_else(|| DbErr::RecordNotFound(format!("the group {group}")))?;
+  let names = db
+    .query_all(statement(
+      r#"SELECT "name" FROM "targets" WHERE "consumer" = ?1 AND "group" = ?2 ORDER BY "name""#,
+      key(),
+    ))
+    .await?;
+
+  Ok(Group {
+    id: row.try_get("", "id")?,
+    consumer: consumer.to_owned(),
+    name: group.to_owned(),
+    limit: row.try_get("", "limit")?,
+    target_names: names.iter().map(|row| row.try_get("", "name")).collect::<Result<_, _>>()?,
   })
 }
 
@@ -271,44 +437,68 @@ impl Store {
     Ok(self.db.begin().await?)
   }
 
-  /// Registers a consumer or moves its hook; true when it is new.
-  pub async fn put_consumer(&self, consumer: &str, hook_url: &str) -> Result<bool, StoreError> {
+  /// Registers a consumer at `now` or moves its hook; the consumer, and true when it is new.
+  pub async fn put_consumer(
+    &self,
+    name: &str,
+    url: &str,
+    now: i64,
+  ) -> Result<(Consumer, bool), StoreError> {
     let txn = self.transaction().await?;
-    let new = !consumer_exists(&txn, consumer).await?;
+    let new = !consumer_exists(&txn, name).await?;
 
     txn
       .execute(statement(
-        r#"INSERT INTO "consumers" ("name", "hook_url") VALUES (?1, ?2)
-           ON CONFLICT ("name") DO UPDATE SET "hook_url" = excluded."hook_url""#,
-        [consumer.into(), hook_url.into()],
+        r#"INSERT INTO "consumers" ("name", "url", "created_at") VALUES (?1, ?2, ?3)
+           ON CONFLICT ("name") DO UPDATE SET "url" = excluded."url""#,
+        [name.into(), url.into(), now.into()],
       ))
       .await?;
+    let row = txn
+      .query_one(statement(r#"SELECT * FROM "consumers" WHERE "name" = ?1"#, [name.into()]))
+      .await?
+      .ok_or(StoreError::UnknownConsumer)?;
+    let consumer = consumer_of(&row)?;
     txn.commit().await?;
-    Ok(new)
+    Ok((consumer, new))
+  }
+
+  /// A page of consumers by id.
+  pub async fn consumers(&self, paging: Paging) -> Result<Rows<Consumer>, StoreError> {
+    let rows = self
+      .db
+      .query_all(statement(
+        r#"SELECT * FROM "consumers" WHERE "id" > ?1 ORDER BY "id" LIMIT ?2"#,
+        [paging.after.into(), (i64::from(paging.limit) + 1).into()],
+      ))
+      .await?;
+    let items = rows.iter().map(consumer_of).collect::<Result<_, _>>()?;
+
+    Ok(paged(items, paging.limit))
   }
 
   /// A consumer's hook URL; none when there is no such consumer.
   pub async fn hook_url(&self, consumer: &str) -> Result<Option<String>, StoreError> {
     let row = self
       .db
-      .query_one(statement(r#"SELECT "hook_url" FROM "consumers" WHERE "name" = ?1"#, [consumer.into()]))
+      .query_one(statement(r#"SELECT "url" FROM "consumers" WHERE "name" = ?1"#, [consumer.into()]))
       .await?;
 
-    Ok(row.map(|row| row.try_get("", "hook_url")).transpose()?)
+    Ok(row.map(|row| row.try_get("", "url")).transpose()?)
   }
 
-  /// Declares a group or changes its limit; true when it is new.
-  pub async fn put_group(&self, consumer: &str, group: &str, limit: i64) -> Result<bool, StoreError> {
+  /// Declares a group or changes its limit; the group, and true when it is new.
+  pub async fn put_group(
+    &self,
+    consumer: &str,
+    group: &str,
+    limit: i64,
+  ) -> Result<(Group, bool), StoreError> {
     let txn = self.transaction().await?;
     if !consumer_exists(&txn, consumer).await? {
       return Err(StoreError::UnknownConsumer);
     }
-    let new = !exists(
-      &txn,
-      r#"SELECT 1 FROM "groups" WHERE "consumer" = ?1 AND "name" = ?2"#,
-      vec![consumer.into(), group.into()],
-    )
-    .await?;
+    let new = !group_exists(&txn, consumer, group).await?;
 
     txn
       .execute(statement(
@@ -317,8 +507,9 @@ impl Store {
         [consumer.into(), group.into(), limit.into()],
       ))
       .await?;
+    let answer = one_group(&txn, consumer, group).await?;
     txn.commit().await?;
-    Ok(new)
+    Ok((answer, new))
   }
 
   /// Retires a group no target names.
@@ -326,7 +517,7 @@ impl Store {
     let txn = self.transaction().await?;
     let key = || vec![consumer.into(), group.into()];
 
-    if !exists(&txn, r#"SELECT 1 FROM "groups" WHERE "consumer" = ?1 AND "name" = ?2"#, key()).await? {
+    if !group_exists(&txn, consumer, group).await? {
       return Err(StoreError::UnknownGroup);
     }
     if exists(&txn, r#"SELECT 1 FROM "targets" WHERE "consumer" = ?1 AND "group" = ?2"#, key()).await? {
@@ -339,8 +530,8 @@ impl Store {
     Ok(())
   }
 
-  /// Registers a target or restates one, keeping its record; true when it is new. Its subject is made
-  /// where none stands.
+  /// Registers a target or restates one, keeping its record and its id; true when it is new. Its subject is
+  /// made where none stands.
   pub async fn put_target(
     &self,
     consumer: &str,
@@ -351,11 +542,10 @@ impl Store {
     if !consumer_exists(&txn, consumer).await? {
       return Err(StoreError::UnknownConsumer);
     }
-    if let Some(group) = &registration.group {
-      let named = vec![consumer.into(), group.as_str().into()];
-      if !exists(&txn, r#"SELECT 1 FROM "groups" WHERE "consumer" = ?1 AND "name" = ?2"#, named).await? {
-        return Err(StoreError::UnknownGroup);
-      }
+    if let Some(group) = &registration.group
+      && !group_exists(&txn, consumer, group).await?
+    {
+      return Err(StoreError::UnknownGroup);
     }
     let new = !exists(
       &txn,
@@ -386,12 +576,12 @@ impl Store {
         [
           consumer.into(),
           target.into(),
-          registration.kind.as_str().into(),
-          registration.label.as_str().into(),
+          registration.kind.clone().into(),
+          registration.label.clone().into(),
           registration.subject.as_str().into(),
           registration.rank.into(),
           clocks.idle_ms.into(),
-          clocks.lifetime_ms.into(),
+          clocks.lifetime_ms.unwrap_or(0).into(),
           clocks.margin_ms.into(),
           registration.ping_bound_ms.into(),
           registration.group.clone().into(),
@@ -406,31 +596,29 @@ impl Store {
     Ok(new)
   }
 
-  /// Retires a target with its record and its attempts; its subject stays.
-  pub async fn delete_target(&self, consumer: &str, target: &str) -> Result<(), StoreError> {
-    let gone = self
+  /// Retires a target with its record and its attempts; its id, and its subject stays.
+  pub async fn delete_target(&self, consumer: &str, target: &str) -> Result<i64, StoreError> {
+    let row = self
       .db
-      .execute(statement(
-        r#"DELETE FROM "targets" WHERE "consumer" = ?1 AND "name" = ?2"#,
+      .query_one(statement(
+        r#"DELETE FROM "targets" WHERE "consumer" = ?1 AND "name" = ?2 RETURNING "id""#,
         [consumer.into(), target.into()],
       ))
-      .await?;
+      .await?
+      .ok_or(StoreError::UnknownTarget)?;
 
-    if gone.rows_affected() == 0 {
-      return Err(StoreError::UnknownTarget);
-    }
-    Ok(())
+    Ok(row.try_get("", "id")?)
   }
 
-  /// Reports a use: the last use moves to `at` where that is later, and a pause on the subject set before
-  /// `started_at` is cleared.
+  /// Records a use: the last use moves to `at` where that is later, and a pause on the subject set before
+  /// `started_at` is lifted. The target's subject, and whether its pause was lifted.
   pub async fn report_use(
     &self,
     consumer: &str,
     target: &str,
     at: i64,
     started_at: i64,
-  ) -> Result<(), StoreError> {
+  ) -> Result<(String, bool), StoreError> {
     let txn = self.transaction().await?;
     let row = txn
       .query_one(statement(
@@ -448,31 +636,52 @@ impl Store {
         [consumer.into(), target.into(), at.into()],
       ))
       .await?;
-    txn
+    let lifted = txn
       .execute(statement(
-        r#"UPDATE "subjects" SET "paused_at" = NULL WHERE "consumer" = ?1 AND "name" = ?2 AND "paused_at" < ?3"#,
-        [consumer.into(), subject.into(), started_at.into()],
+        r#"UPDATE "subjects" SET "paused_at" = NULL, "paused_until" = NULL
+           WHERE "consumer" = ?1 AND "name" = ?2 AND "paused_at" < ?3"#,
+        [consumer.into(), subject.as_str().into(), started_at.into()],
       ))
-      .await?;
+      .await?
+      .rows_affected()
+      > 0;
     txn.commit().await?;
-    Ok(())
+    Ok((subject, lifted))
   }
 
-  /// Every target, ordered by rank, then consumer, then name; `consumer` and `subject` narrow it.
+  /// Every target, in no order; the pass orders them by its plan.
+  pub async fn all_targets(&self) -> Result<Vec<Target>, StoreError> {
+    let rows = self.db.query_all(statement(TARGETS, [])).await?;
+
+    Ok(rows.iter().map(target_of).collect::<Result<_, _>>()?)
+  }
+
+  /// A page of targets by id; `consumer` and `subject` narrow it.
   pub async fn targets(
     &self,
     consumer: Option<&str>,
     subject: Option<&str>,
-  ) -> Result<Vec<Target>, StoreError> {
+    paging: Paging,
+  ) -> Result<Rows<Target>, StoreError> {
     let sql = format!(
-      r#"{TARGETS} WHERE (?1 IS NULL OR t."consumer" = ?1) AND (?2 IS NULL OR t."subject" = ?2){ORDER}"#
+      r#"{TARGETS} WHERE (?1 IS NULL OR t."consumer" = ?1) AND (?2 IS NULL OR t."subject" = ?2) AND t."id" > ?3
+         ORDER BY t."id" LIMIT ?4"#
     );
     let rows = self
       .db
-      .query_all(statement(&sql, [consumer.map(str::to_owned).into(), subject.map(str::to_owned).into()]))
+      .query_all(statement(
+        &sql,
+        [
+          consumer.map(str::to_owned).into(),
+          subject.map(str::to_owned).into(),
+          paging.after.into(),
+          (i64::from(paging.limit) + 1).into(),
+        ],
+      ))
       .await?;
+    let items = rows.iter().map(target_of).collect::<Result<_, _>>()?;
 
-    Ok(rows.iter().map(target_of).collect::<Result<_, _>>()?)
+    Ok(paged(items, paging.limit))
   }
 
   /// One target; none when there is no such target.
@@ -483,84 +692,107 @@ impl Store {
     Ok(row.as_ref().map(target_of).transpose()?)
   }
 
-  /// A consumer's subjects, by name.
-  pub async fn subjects(&self, consumer: &str) -> Result<Vec<Subject>, StoreError> {
+  /// A page of a consumer's subjects by id.
+  pub async fn subjects(&self, consumer: &str, paging: Paging) -> Result<Rows<Subject>, StoreError> {
     if !consumer_exists(&self.db, consumer).await? {
       return Err(StoreError::UnknownConsumer);
     }
+    let sql = format!(r#"{SUBJECTS} WHERE s."consumer" = ?1 AND s."id" > ?2 ORDER BY s."id" LIMIT ?3"#);
     let rows = self
       .db
       .query_all(statement(
-        r#"SELECT s."name", s."switch", s."paused_at",
-                  (SELECT COUNT(*) FROM "targets" t WHERE t."consumer" = s."consumer" AND t."subject" = s."name") AS "targets"
-           FROM "subjects" s WHERE s."consumer" = ?1 ORDER BY s."name""#,
-        [consumer.into()],
+        &sql,
+        [consumer.into(), paging.after.into(), (i64::from(paging.limit) + 1).into()],
       ))
       .await?;
+    let items = rows.iter().map(subject_of).collect::<Result<_, _>>()?;
 
-    Ok(rows.iter().map(subject_row).collect::<Result<_, _>>()?)
+    Ok(paged(items, paging.limit))
   }
 
-  /// Throws a subject's switch, or unsets it with none; the subject is made where none stands.
-  pub async fn set_switch(
+  /// One subject; none when there is no such subject.
+  pub async fn subject(&self, consumer: &str, subject: &str) -> Result<Option<Subject>, StoreError> {
+    let sql = format!(r#"{SUBJECTS} WHERE s."consumer" = ?1 AND s."name" = ?2"#);
+    let row = self.db.query_one(statement(&sql, [consumer.into(), subject.into()])).await?;
+
+    Ok(row.as_ref().map(subject_of).transpose()?)
+  }
+
+  /// Sets a subject's switch or pause as `change` says; the subject is made where none stands.
+  pub async fn change_subject(
     &self,
     consumer: &str,
     subject: &str,
-    switch: Option<bool>,
-  ) -> Result<Subject, StoreError> {
-    self
-      .on_subject(consumer, subject, r#"UPDATE "subjects" SET "switch" = ?3"#, switch.into())
-      .await
-  }
-
-  /// Pauses a subject at `at`, moving a pause already standing; the subject is made where none stands.
-  pub async fn pause(&self, consumer: &str, subject: &str, at: i64) -> Result<Subject, StoreError> {
-    self
-      .on_subject(consumer, subject, r#"UPDATE "subjects" SET "paused_at" = ?3"#, at.into())
-      .await
-  }
-
-  async fn on_subject(
-    &self,
-    consumer: &str,
-    subject: &str,
-    update: &str,
-    value: Value,
+    change: SubjectChange,
   ) -> Result<Subject, StoreError> {
     let txn = self.transaction().await?;
     if !consumer_exists(&txn, consumer).await? {
       return Err(StoreError::UnknownConsumer);
     }
     ensure_subject(&txn, consumer, subject).await?;
-    txn
-      .execute(statement(
-        &format!(r#"{update} WHERE "consumer" = ?1 AND "name" = ?2"#),
-        [consumer.into(), subject.into(), value],
-      ))
-      .await?;
-    let answer = subject_of(&txn, consumer, subject).await?;
+    if let Some(switch) = change.switch {
+      txn
+        .execute(statement(
+          r#"UPDATE "subjects" SET "switch" = ?3 WHERE "consumer" = ?1 AND "name" = ?2"#,
+          [consumer.into(), subject.into(), switch.into()],
+        ))
+        .await?;
+    }
+    if let Some(pause) = change.pause {
+      txn
+        .execute(statement(
+          r#"UPDATE "subjects" SET "paused_at" = ?3, "paused_until" = ?4 WHERE "consumer" = ?1 AND "name" = ?2"#,
+          [
+            consumer.into(),
+            subject.into(),
+            pause.map(|pause| pause.at).into(),
+            pause.map(|pause| pause.until).into(),
+          ],
+        ))
+        .await?;
+    }
+    let answer = one_subject(&txn, consumer, subject).await?;
     txn.commit().await?;
     Ok(answer)
   }
 
-  /// Whether the owner has stopped the round.
-  pub async fn round_stopped(&self) -> Result<bool, StoreError> {
+  /// The round as it is kept.
+  pub async fn round(&self) -> Result<Round, StoreError> {
     let row = self
       .db
-      .query_one(statement(r#"SELECT "stopped" FROM "round" WHERE "only" = 1"#, []))
+      .query_one(statement(r#"SELECT "stopped", "interval_ms" FROM "round" WHERE "only" = 1"#, []))
       .await?
       .ok_or_else(|| DbErr::RecordNotFound("the round".into()))?;
 
-    Ok(row.try_get("", "stopped")?)
+    Ok(Round {
+      stopped: row.try_get("", "stopped")?,
+      interval_ms: row.try_get("", "interval_ms")?,
+    })
   }
 
-  /// Stops the round or lets it run.
-  pub async fn set_round_stopped(&self, stopped: bool) -> Result<(), StoreError> {
-    self
-      .db
-      .execute(statement(r#"UPDATE "round" SET "stopped" = ?1 WHERE "only" = 1"#, [stopped.into()]))
-      .await?;
-    Ok(())
+  /// Whether the round is stopped.
+  pub async fn round_stopped(&self) -> Result<bool, StoreError> {
+    Ok(self.round().await?.stopped)
+  }
+
+  /// Changes the round as `change` says; the round as it then stands.
+  pub async fn change_round(&self, change: RoundChange) -> Result<Round, StoreError> {
+    let txn = self.transaction().await?;
+    if let Some(stopped) = change.stopped {
+      txn
+        .execute(statement(r#"UPDATE "round" SET "stopped" = ?1 WHERE "only" = 1"#, [stopped.into()]))
+        .await?;
+    }
+    if let Some(interval_ms) = change.interval_ms {
+      txn
+        .execute(statement(
+          r#"UPDATE "round" SET "interval_ms" = ?1 WHERE "only" = 1"#,
+          [interval_ms.into()],
+        ))
+        .await?;
+    }
+    txn.commit().await?;
+    self.round().await
   }
 
   /// Records an attempt on a target: its last attempt, the log, and the last warmed or failed time its
@@ -628,8 +860,7 @@ impl Store {
       let outcome: String = row.try_get("", "outcome")?;
       Ok(Attempt {
         at: row.try_get("", "at")?,
-        outcome: Outcome::parse(&outcome)
-          .ok_or_else(|| DbErr::Type(format!("an attempt's outcome reads {outcome}")))?,
+        outcome: outcome_of(&outcome)?,
         code: row.try_get("", "code")?,
         reason: row.try_get("", "reason")?,
       })
@@ -642,6 +873,78 @@ impl Store {
     let gone = self
       .db
       .execute(statement(r#"DELETE FROM "attempts" WHERE "at" < ?1"#, [before.into()]))
+      .await?;
+
+    Ok(gone.rows_affected())
+  }
+
+  /// Keeps an event in the window; its number.
+  pub async fn append_event(&self, kind: &str, at: i64, data: &str) -> Result<i64, StoreError> {
+    let row = self
+      .db
+      .query_one(statement(
+        r#"INSERT INTO "events" ("kind", "at", "data") VALUES (?1, ?2, ?3) RETURNING "id""#,
+        [kind.into(), at.into(), data.into()],
+      ))
+      .await?
+      .ok_or_else(|| DbErr::RecordNotFound("the event just kept".into()))?;
+
+    Ok(row.try_get("", "id")?)
+  }
+
+  /// The number the next event will take: one past the highest ever given, whether or not it is still
+  /// kept.
+  pub async fn next_event_id(&self) -> Result<i64, StoreError> {
+    let row = self
+      .db
+      .query_one(statement(
+        r#"SELECT COALESCE((SELECT "seq" FROM "sqlite_sequence" WHERE "name" = 'events'), 0) + 1 AS "next""#,
+        [],
+      ))
+      .await?
+      .ok_or_else(|| DbErr::RecordNotFound("the event sequence".into()))?;
+
+    Ok(row.try_get("", "next")?)
+  }
+
+  /// The first event still kept; the next number where none is.
+  pub async fn first_kept_event(&self) -> Result<i64, StoreError> {
+    let row = self.db.query_one(statement(r#"SELECT MIN("id") AS "first" FROM "events""#, [])).await?;
+
+    match row.map(|row| row.try_get::<Option<i64>>("", "first")).transpose()?.flatten() {
+      Some(first) => Ok(first),
+      None => self.next_event_id().await,
+    }
+  }
+
+  /// A page of the events past `after`, of the kinds named where any are.
+  pub async fn events(
+    &self,
+    after: i64,
+    kinds: &[String],
+    limit: u32,
+  ) -> Result<Rows<StoredEvent>, StoreError> {
+    // The kinds go in as one comma-joined list, none of them holding a comma, and a kind matches where it
+    // stands between two of its commas.
+    let rows = self
+      .db
+      .query_all(statement(
+        r#"SELECT "id", "kind", "at", "data" FROM "events"
+           WHERE "id" > ?1 AND (?2 = '' OR instr(',' || ?2 || ',', ',' || "kind" || ',') > 0)
+           ORDER BY "id" LIMIT ?3"#,
+        [after.into(), kinds.join(",").into(), (i64::from(limit) + 1).into()],
+      ))
+      .await?;
+    let items = rows.iter().map(event_of).collect::<Result<_, _>>()?;
+
+    Ok(paged(items, limit))
+  }
+
+  /// Removes the window's events from before `before`; how many went.
+  pub async fn prune_events(&self, before: i64) -> Result<u64, StoreError> {
+    let gone = self
+      .db
+      .execute(statement(r#"DELETE FROM "events" WHERE "at" < ?1"#, [before.into()]))
       .await?;
 
     Ok(gone.rows_affected())

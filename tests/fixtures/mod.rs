@@ -1,14 +1,17 @@
-//! What the store's and the pass's tests share: a store in a scratch directory, a clock the test moves,
-//! and a registration to vary.
+//! What the store's, the pass's and the routes' tests share: a store in a scratch directory, a clock the
+//! test moves, and a registration to vary.
 
 // Each test file is its own crate and uses only part of this module.
 #![allow(dead_code)]
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use bmo_cache_warmer::clock::Clock;
+use bmo_cache_warmer::pass::Warmer;
+use bmo_cache_warmer::policy::Policy;
+use bmo_cache_warmer::schedule::Clocks;
 use bmo_cache_warmer::store::{Registration, Store};
-use cache_warmer::Clocks;
 use tempfile::TempDir;
 
 pub const MINUTE: i64 = 60_000;
@@ -21,6 +24,16 @@ pub async fn store() -> (TempDir, Store) {
   let store = Store::open(&dir.path().join("warmer.sqlite")).await.expect("the store opens");
 
   (dir, store)
+}
+
+/// A warmer over a fresh store on the built-in policy and a clock standing at `NOW`.
+pub async fn warmer() -> (TempDir, Arc<Warmer>, Arc<TestClock>) {
+  let (dir, store) = store().await;
+  let clock = Arc::new(TestClock::at(NOW));
+  let policy = Policy::builtin().expect("the built-in policy reads");
+  let warmer = Warmer::open(store, policy, clock.clone()).await.expect("the warmer opens");
+
+  (dir, Arc::new(warmer), clock)
 }
 
 /// A clock that stands where the test puts it.
@@ -49,8 +62,8 @@ impl Clock for TestClock {
 /// A launch line's registration: idle 40 minutes, lifetime 60, failures touch, warm by default.
 pub fn line(subject: &str) -> Registration {
   Registration {
-    kind: "launch_line".into(),
-    label: "a launch line".into(),
+    kind: Some("launch-line".into()),
+    label: Some("a launch line".into()),
     subject: subject.into(),
     rank: 50,
     clocks: Clocks {
@@ -70,7 +83,7 @@ pub fn line(subject: &str) -> Registration {
 /// A pool place's registration in `group`: lifetime 60 less 5, failures do not touch.
 pub fn place(subject: &str, group: &str) -> Registration {
   let mut registration = line(subject);
-  registration.kind = "pool_place".into();
+  registration.kind = Some("pool-place".into());
   registration.rank = 10;
   registration.clocks.margin_ms = 5 * MINUTE;
   registration.clocks.failure_touches = false;

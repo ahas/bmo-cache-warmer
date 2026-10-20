@@ -12,14 +12,16 @@ or the round ends its warming.
 ## The pass
 
 - **When.** The first pass runs the policy's start delay (30 seconds) after the service starts: a
-  starting host has real work to do first and warming is upkeep. Then one pass runs every tick (60
-  seconds).
-- **Never beside itself.** One pass runs at a time. A tick that comes while a pass is still running is
-  put off until it ends, and a tick missed that way is delayed rather than run twice to catch up. A
-  pass asked for over `POST /pass` while one runs is refused.
+  starting host has real work to do first and warming is upkeep. Then one pass runs every interval of
+  the round: the one set over `PATCH /round`, or the policy's tick (60 seconds) while none is. A new
+  interval moves the next pass to the last pass's time plus the new interval, or to now where that has
+  passed.
+- **Never beside itself.** One pass runs at a time. A pass that outruns its interval puts the next off
+  until it ends; the next then comes at once and the one after a whole interval later, so missed
+  passes are never run to catch up. A pass asked for over `POST /passes` while one runs is refused.
 - **A failed pass is not the end.** A pass the store fails is written to standard error, and the next
-  tick comes as usual.
-- **The round first.** While the owner has stopped the round, a pass judges nothing and pings nothing.
+  one comes as usual.
+- **The round first.** While the round is not running, a pass judges nothing and pings nothing.
 - **One target at a time, in rank order.** The pass walks targets by the rank each registration
   declares, lowest first, then by consumer and target name; the order is stable from pass to pass.
   It waits for each ping's answer before the next.
@@ -29,33 +31,37 @@ or the round ends its warming.
   passed over, and no other target of its group takes its place in that pass.
 - **Bounded.** A ping is given the target's ping bound plus the policy's slack. A hook that has not
   answered by then is recorded failed, and the pass goes on.
+- **Recorded.** Each pass ends with a `pass.created` event, and each attempt with a `target.changed`
+  event for its target.
 
 ## When a target is due
 
-- **Judged by bmo-agency's keepalive schedule library.** The rule below and the order of 「Groups」 are
-  judged by the `cache-warmer` crate, which agency's own documents state as part of its boundary. The
-  warmer hands it each target's clocks, record, switch and pause, and the pass's moment, idle override
-  and round; the clock, the store, the policy, the ping and what its answer leaves behind stay the
-  warmer's.
+- **Judged by the schedule module.** The rule below and the order of 「Groups」 are the package's
+  `schedule` module: a library with no dependency of its own, judging only from what it is handed,
+  `now` included, which another repository may import from this package. The warmer hands it each
+  target's clocks, record, switch and pause, and the pass's moment, idle override and round; the
+  clock, the store, the policy, the ping and what its answer leaves behind stay the service's.
 
 A target's **touch** is the later of its last use and its last warmed ping, and, where it registered
-`failure_touches`, its last failed attempt. Its **idle** is now less its touch. Its **idle stretch**
-is its `idle_ms`, or the pass's idle override where the pass has one and the target honours it.
+`failureTouches`, its last failed attempt. Its **idle** is now less its touch. Its **idle stretch**
+is its `idleMs`, or the pass's idle override where the pass has one and the target honours it.
 
 A target is due in a pass when all of these hold:
 
 1. **It is on.** Its subject's switch is on, or is unset and its registration warms by default. The
    policy's default for a registration that says nothing is off.
 2. **It is not paused.** Its subject has no pause standing.
-3. **The round is not stopped.**
+3. **The round is running.**
 4. **It is idle enough.** It has no touch at all, or its idle is at least its idle stretch. A target
    never used and never pinged is due at once: this is how a session not yet standing is brought up.
-5. **Its prefix is still there.** Where it declares a lifetime, its idle is below the lifetime less
-   its margin. A lifetime no larger than its margin leaves nothing, and the target is never due. A
-   target that declares no lifetime has no such limit: the consumer resumes it as it stands.
+5. **Its prefix is still there.** Its idle is below its lifetime, `ttlMs`, less its margin. A lifetime
+   no larger than its margin leaves nothing, and the target is never due.
 
 A prefix already dropped is left alone. Pinging it would rebuild it at the cost of the work it is
 waiting for, and if that work never comes the ping is all that was spent.
+
+The library also judges a lifetime that is not declared at all as no limit, for a caller whose
+targets have none; the service always has one, since a registration declares `ttlMs`.
 
 ## Groups
 
@@ -76,9 +82,9 @@ waiting for, and if that work never comes the ping is all that was spent.
 - **Only a warmed answer restarts the clock.** Its arrival becomes the target's last warmed time, and
   so its touch.
 - **A busy answer** means work was running on the target, keeping the prefix warm itself. It moves
-  nothing else; the use report the work makes when it ends moves the touch.
+  nothing else; the use the work records when it ends moves the touch.
 - **A skipped answer** moves nothing else; the target is judged again next pass.
-- **A failed answer** moves nothing else, unless the target registered `failure_touches`. Then the
+- **A failed answer** moves nothing else, unless the target registered `failureTouches`. Then the
   attempt counts as a touch: the target is not asked again until its idle stretch has passed since,
   and its lifetime is measured from it. A target that did not register it is asked again on the next
   pass.
@@ -86,48 +92,48 @@ waiting for, and if that work never comes the ping is all that was spent.
   policy's length of UTF-16 units, the way a script counts a string; a surrogate pair the cut splits
   ends as the replacement character.
 
-## The owner's switches
+## The switches
 
-- **The round** stops every warming at once and holds until thrown back.
+- **The round** stops every warming at once while it is not running, and holds until set running.
 - **A subject's switch** turns all of one subject's targets on or off and holds until thrown back;
   unset, each target follows its registration's default. A subject can be switched before any target
   names it.
-- **A pause** turns a subject off until its next use. A use report whose work began after the pause
-  clears it; work already running when the pause was set does not. Nothing else clears it, and it
-  never changes the switch, which still wins while it is off.
+- **A pause** turns a subject off from the moment it is set until its `pausedUntil`, or until a use
+  whose work began after the pause was set, whichever comes first. Work already running when the pause
+  was set does not lift it. It never changes the switch, which still wins while it is off.
 - **Records stand still.** A target passed over because it is off, paused or stopped keeps its record
   where it was, and is judged from that record once it is on again.
 
-## Use reports
+## Uses
 
-- A consumer reports each use of a target with when its prefix was last written and when the work
-  began. The touch moves to the write where that is later; a report older than the record moves
-  nothing.
+- A consumer records each use of a target with when its prefix was last written and when the work
+  began. The touch moves to the write where that is later; a use older than the record moves nothing.
 - A registration may carry the last use the consumer already knows, so a target registered after its
   session has stood a while is judged from that session's last write rather than brought up at once.
 
 ## The policy
 
 The warmer's own fixed numbers stand in `policy/warmer.toml`, built into the binary and read once as
-the service starts. A key the reader does not know, a missing key, or a clock of 0 refuses the file,
-naming what is wrong, so a misspelling never reads as a default.
+the service starts. A key the reader does not know, a missing key, or a value of 0 where one must be
+above it refuses the file, naming what is wrong, so a misspelling never reads as a default.
 
 | Key | Value | Meaning |
 | --- | --- | --- |
 | `start_delay_seconds` | 30 | how long after the service starts the first pass waits |
-| `tick_seconds` | 60 | how often a pass comes round, above 0 |
+| `tick_seconds` | 60 | the round's interval while none is set, above 0 |
 | `warm_by_default` | false | whether a target warms when neither its registration nor its subject's switch says |
+| `idle_percent` | 66 | a registration's idle stretch where it states none: this share of its lifetime less its margin, at least one millisecond, 1 to 100 |
+| `ping_bound_seconds` | 120 | a registration's ping bound where it states none, above 0 |
 | `ping_slack_seconds` | 15 | added to a target's ping bound before the warmer gives up on the hook, for the hook's own transport and answer |
 | `reason_units` | 400 | the UTF-16 units a failed attempt's reason is cut to, above 0 |
 | `log_days` | 14 | how many days an attempt stays in the attempt log, above 0 |
+| `event_days` | 2 | how many days an event stays in the event window, above 0 |
 
-Every clock a target runs on — idle stretch, lifetime, margin, ping bound — is its registration's,
-never this file's.
+A target's clocks are its registration's; the policy fills in only what a registration leaves out.
 
 ## What the warmer leaves to the consumer
 
-Whether a provider is on, whether an account can answer, whether a turn is running, which line a ping
-goes into and what it says are the consumer's, answered through the hook. Which targets exist at all —
-which workers, which support workers, which pool places — is the consumer's, stated by what it
-registers and retires. The table in `docs/api.md` (「Consumers and their targets」) states each
-consumer's clocks.
+Whether a provider is on, whether an account can answer, whether work is running, which line a ping
+goes into and what it says are the consumer's, answered through the hook. Which targets exist at all
+is the consumer's, stated by what it registers and retires (`docs/api.md`, 「What stays the
+consumer's」).

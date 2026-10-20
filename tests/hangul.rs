@@ -7,8 +7,8 @@ use std::path::Path;
 
 use support::{ROOT, files_under, shown};
 
-/// The directories holding code, policy, the deploy unit and tests.
-const READ: [&str; 4] = ["src", "policy", "deploy", "tests"];
+/// The directories holding code, its examples, the plugin, policy, the deploy unit and tests.
+const READ: [&str; 6] = ["src", "examples", "plugin", "policy", "deploy", "tests"];
 
 /// The Hangul syllables block, U+AC00 to U+D7A3, named by code point so this file holds none of it.
 fn is_hangul(c: char) -> bool {
