@@ -5,10 +5,14 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use support::{ROOT, files_under, shown};
+use support::{ROOT, files_under, members, shown};
 
-/// The directories holding code, its examples, the plugin, policy, the deploy unit and tests.
-const READ: [&str; 6] = ["src", "examples", "plugin", "policy", "deploy", "tests"];
+/// The directories outside any package's code and tests: the examples, the plugin, policy and the deploy
+/// unit.
+const READ: [&str; 4] = ["examples", "plugin", "policy", "deploy"];
+
+/// The directories holding a workspace member's code and its tests.
+const MEMBER_READ: [&str; 2] = ["src", "tests"];
 
 /// The Hangul syllables block, U+AC00 to U+D7A3, named by code point so this file holds none of it.
 fn is_hangul(c: char) -> bool {
@@ -27,9 +31,11 @@ fn hangul_lines(path: &Path, text: &str) -> Vec<String> {
 
 #[test]
 fn no_hangul_in_code_policy_or_tests() {
-  let found: Vec<String> = READ
-    .iter()
-    .flat_map(|dir| files_under(&Path::new(ROOT).join(dir)))
+  let fixed = READ.iter().map(|dir| Path::new(ROOT).join(dir));
+  let member_dirs = members().into_iter().flat_map(|member| MEMBER_READ.map(|dir| member.join(dir)));
+  let found: Vec<String> = fixed
+    .chain(member_dirs)
+    .flat_map(|dir| files_under(&dir))
     .flat_map(|path| {
       let bytes = fs::read(&path).expect("a file is readable");
       hangul_lines(&path, &String::from_utf8_lossy(&bytes))

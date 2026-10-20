@@ -2,7 +2,10 @@
 //! clocks each runs on, record every use, and serve a target-ping hook; the warmer runs the pass, judges
 //! which targets are due, holds the switches and keeps the record of every ping (`docs/api.md`,
 //! `docs/warming.md`, `docs/store.md`). Beside the service stand its client, its OpenAPI document and the
-//! harness plugin's MCP server, and the schedule rule as a library of its own.
+//! harness plugin's MCP server. The schedule rule is the crate `bmo-cache-warmer-schedule`, re-exported
+//! here as `schedule`.
+
+pub use bmo_cache_warmer_schedule as schedule;
 
 pub mod client;
 pub mod clock;
@@ -12,7 +15,6 @@ pub mod openapi;
 pub mod pass;
 pub mod policy;
 pub mod routes;
-pub mod schedule;
 pub mod snapshot;
 pub mod store;
 pub mod ticker;

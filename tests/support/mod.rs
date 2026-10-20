@@ -1,4 +1,5 @@
-//! What the tests share: the root and the walk over the files the repository checks read.
+//! What the tests share: the root, the workspace's members and the walk over the files the repository
+//! checks read.
 
 // Each test file is its own crate and uses only part of this module.
 #![allow(dead_code)]
@@ -6,7 +7,29 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use toml::{Table, Value};
+
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
+
+/// A manifest, read.
+pub fn manifest(path: &Path) -> Table {
+  let text =
+    fs::read_to_string(path).unwrap_or_else(|error| panic!("{} is unreadable: {error}", shown(path)));
+  text.parse().unwrap_or_else(|error| panic!("{} reads: {error}", shown(path)))
+}
+
+/// The directory of each member the root manifest's workspace names, the root itself included.
+pub fn members() -> Vec<PathBuf> {
+  let root = manifest(&Path::new(ROOT).join("Cargo.toml"));
+  root
+    .get("workspace")
+    .and_then(|workspace| workspace.get("members"))
+    .and_then(Value::as_array)
+    .expect("the root manifest names the workspace's members")
+    .iter()
+    .map(|member| Path::new(ROOT).join(member.as_str().expect("a member is a path")))
+    .collect()
+}
 
 /// Directories no check reads: build output and git's own.
 const SKIPPED: [&str; 2] = ["target", ".git"];

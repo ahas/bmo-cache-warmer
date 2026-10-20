@@ -1,16 +1,27 @@
-# The service as one package at the root: the schedule library, the service with its client, its OpenAPI
-# document and the harness plugin's MCP server, and the one binary that serves, answers the plugin and takes
-# snapshots. The repository checks and the service's tests live in `tests/`.
+# The workspace: the service package at the root and the schedule crate in `schedule/`, one version for both.
+[workspace]
+members = [".", "schedule"]
+default-members = [".", "schedule"]
+
+[workspace.package]
+version = "0.1.0-rev.4"
+edition = "2024"
+
+# The service package: the service with its client, its OpenAPI document and the harness plugin's MCP
+# server, and the one binary that serves, answers the plugin and takes snapshots. The repository checks and
+# the service's tests live in `tests/`.
 [package]
 name = "bmo-cache-warmer"
 description = "A keepalive scheduler: keeps registered prompt-cache prefixes warm by asking their consumers to ping them."
-version = "0.1.0-rev.3"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 [dependencies]
 # The service's routes and its event stream.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+# The schedule rule, re-exported as `schedule`.
+bmo-cache-warmer-schedule = { path = "schedule" }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 # The event stream's body.
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }

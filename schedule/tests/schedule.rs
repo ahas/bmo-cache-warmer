@@ -1,7 +1,7 @@
-//! The schedule library's rule as its contract (docs/warming.md, "When a target is due" and "Groups"): the
+//! The schedule crate's rule as its contract (docs/warming.md, "When a target is due" and "Groups"): the
 //! due rule, groups, ranks, the switches and the reason cut, judged from what each test hands it.
 
-use bmo_cache_warmer::schedule::{
+use bmo_cache_warmer_schedule::{
   Candidate, Clocks, Group, Pass, Record, first_units, is_on, plan, usable, use_clears_pause,
 };
 

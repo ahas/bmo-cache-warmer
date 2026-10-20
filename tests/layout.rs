@@ -1,12 +1,13 @@
-//! The repository's layout: one Cargo package at the root and no other build tool's manifest, no
-//! directory named after its parent, and one version.
+//! The repository's layout: one Cargo workspace at the root whose members are its only packages, no other
+//! build tool's manifest, no directory named after its parent, and one version.
 
 mod support;
 
 use std::fs;
 use std::path::Path;
 
-use support::{ROOT, files_under, is_skipped, shown};
+use support::{ROOT, files_under, is_skipped, manifest, members, shown};
+use toml::Value;
 
 /// File names that declare a package or a project to some other build tool.
 const OTHER_MANIFESTS: [&str; 12] = [
@@ -35,14 +36,30 @@ fn only_cargo_manifests_at_the_root() {
 }
 
 #[test]
-fn the_root_manifest_is_the_only_one() {
-  let root = Path::new(ROOT).join("Cargo.toml");
+fn every_manifest_is_a_member_of_the_workspace() {
+  let named: Vec<_> = members().iter().map(|member| member.join("Cargo.toml")).collect();
   let others: Vec<String> = files_under(Path::new(ROOT))
     .into_iter()
-    .filter(|path| path.file_name().is_some_and(|name| name == "Cargo.toml") && *path != root)
+    .filter(|path| path.file_name().is_some_and(|name| name == "Cargo.toml") && !named.contains(path))
     .map(|path| shown(&path))
     .collect();
-  assert!(others.is_empty(), "the repository is one package, yet these stand too: {others:?}");
+  assert!(others.is_empty(), "these manifests are no member of the workspace: {others:?}");
+}
+
+#[test]
+fn every_member_takes_the_workspace_version() {
+  let own: Vec<String> = members()
+    .iter()
+    .map(|member| member.join("Cargo.toml"))
+    .filter(|path| {
+      let version = manifest(path).get("package").and_then(|package| package.get("version")).cloned();
+      let inherited =
+        version.as_ref().and_then(|version| version.get("workspace")).and_then(Value::as_bool);
+      inherited != Some(true)
+    })
+    .map(|path| shown(&path))
+    .collect();
+  assert!(own.is_empty(), "these members do not take the workspace's version: {own:?}");
 }
 
 fn nested_twins(dir: &Path, twins: &mut Vec<String>) {

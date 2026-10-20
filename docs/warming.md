@@ -36,9 +36,10 @@ or the round ends its warming.
 
 ## When a target is due
 
-- **Judged by the schedule module.** The rule below and the order of 「Groups」 are the package's
-  `schedule` module: a library with no dependency of its own, judging only from what it is handed,
-  `now` included, which another repository may import from this package. The warmer hands it each
+- **Judged by the schedule crate.** The rule below and the order of 「Groups」 are the crate
+  `bmo-cache-warmer-schedule` (`docs/api.md`, 「The schedule crate」): a library with no dependency of
+  its own, judging only from what it is handed, `now` included, which another repository may take
+  alone. The service re-exports it as its `schedule` module. The warmer hands it each
   target's clocks, record, switch and pause, and the pass's moment, idle override and round; the
   clock, the store, the policy, the ping and what its answer leaves behind stay the service's.
 

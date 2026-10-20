@@ -1,0 +1,8 @@
+# The schedule rule as a crate of its own (docs/api.md, "The schedule crate"). It carries no dependency of
+# any kind, so a consumer takes the rule alone and no feature of the service's dependencies reaches it.
+[package]
+name = "bmo-cache-warmer-schedule"
+description = "The keepalive schedule's rule: when a kept prompt-cache prefix is due a ping, and in what order a pass pings."
+version.workspace = true
+edition.workspace = true
+publish = false

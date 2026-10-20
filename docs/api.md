@@ -1,10 +1,10 @@
 # Boundary API
 
 Every interface by which cache-warmer meets anything outside its own process: the HTTP routes it
-serves, the event stream, the target-ping hook a consumer serves, the client and the harness plugin
-it publishes, and the commands of its one binary. Other services match against this document and
-`docs/openapi.json`; the code is one realisation of them. How a pass runs and when a target is due
-is `docs/warming.md`; what the store keeps is `docs/store.md`.
+serves, the event stream, the target-ping hook a consumer serves, the client, the schedule crate and
+the harness plugin it publishes, and the commands of its one binary. Other services match against
+this document and `docs/openapi.json`; the code is one realisation of them. How a pass runs and when
+a target is due is `docs/warming.md`; what the store keeps is `docs/store.md`.
 
 The warmer is a keepalive scheduler and nothing else. It knows no provider, no model, no account and
 no caller. A consumer registers what to keep warm and on which clock, tells it each time a target is
@@ -14,9 +14,10 @@ makes are pings to the URLs consumers registered.
 
 ## Versioning
 
-The version is the package's in `Cargo.toml` (semver); `VERSION` at the root holds the same. The
-health route, the OpenAPI document and the MCP server all answer it. This document and
-`docs/openapi.json` change in the same commit as the boundary they state.
+The repository has one version (semver): the workspace's in the root `Cargo.toml`, which every member
+package inherits, and `VERSION` at the root holds the same. The health route, the OpenAPI document and
+the MCP server all answer it. This document and `docs/openapi.json` change in the same commit as the
+boundary they state.
 
 - **Before the first release the version is `0.1.0` and counts revisions.** The first version, `0.1.0`,
   is the base. Every later version bump is one revision, written `0.1.0-rev.<n>` with `n` counting the
@@ -341,6 +342,15 @@ The module `client` of the package is the service's client: one method for each 
 reading the bodies `docs/openapi.json` states, a refusal read back as its status, code and sentence.
 It carries the contract and no caller's policy. It is built with the address and the token, and
 reaches the service through no proxy.
+
+## The schedule crate
+
+The crate `bmo-cache-warmer-schedule`, in `schedule/`, is the schedule rule as a library of its own:
+when a target is due, in what order a pass pings its targets, the switches as values and the reason
+cut (`docs/warming.md`). It has no dependency of any kind, reads no clock, store or policy, and judges
+only from what it is handed, `now` included. A consumer that takes it builds the rule alone, so none
+of the service's dependencies or their features reaches that consumer's build. The service package
+depends on it and re-exports it as `schedule`, so `bmo_cache_warmer::schedule` names the same items.
 
 ## The harness plugin
 

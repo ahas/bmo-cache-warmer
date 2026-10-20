@@ -30,8 +30,10 @@ These rules hold every change to this repository.
 - **It is an upstream.** A harness can take it as its first entry point through its MCP server, with no
   other unit running; its API names nothing only one caller uses. It publishes its client and its
   harness plugin from this repository, both built on the one OpenAPI document `docs/openapi.json`.
-- **The schedule rule is this repository's.** The due rule and the plan are the package's `schedule`
-  module, which uses nothing outside itself so that another repository may import it from here.
+- **The schedule rule is this repository's.** The due rule and the plan are the crate
+  `bmo-cache-warmer-schedule` in `schedule/`, which has no dependency of any kind so that another
+  repository may take it alone; the service re-exports it as its `schedule` module. The dependency
+  check in `tests/` holds that it has none.
 - **Dependencies:** crates from the registry pinned in the manifest, and nothing from another
   repository, the base libraries included: nothing by path out of the repository and nothing by git.
   The dependency check in `tests/` holds this.
@@ -52,16 +54,17 @@ These rules hold every change to this repository.
 
 ## Layout
 
-- One Cargo package at the root, no other build tool's manifest, and no directory named after its
-  parent; the layout check in `tests/` holds these.
-- Tests live in `tests/`, never beside the code they test.
+- One Cargo workspace at the root, made of the service package at the root and the schedule crate in
+  `schedule/`, each member inheriting the workspace's one version; no other build tool's manifest, and
+  no directory named after its parent. The layout check in `tests/` holds these.
+- Each package's tests live in its own `tests/`, never beside the code they test.
 
 ## The stages of a change
 
-1. **Writing:** the only check is `cargo check --all-targets`.
-2. **Review:** read the whole diff against the document governing it, then `cargo fmt --check` and
-   `cargo clippy --all-targets -- -D warnings`.
-3. **Verification:** the test targets touched, then `cargo test` once, output written to a file and
-   the file read.
+1. **Writing:** the only check is `cargo check --workspace --all-targets`.
+2. **Review:** read the whole diff against the document governing it, then `cargo fmt --all --check`
+   and `cargo clippy --workspace --all-targets -- -D warnings`.
+3. **Verification:** the test targets touched, then `cargo test --workspace` once, output written to a
+   file and the file read.
 
 A change is not done before stage 3 has passed.

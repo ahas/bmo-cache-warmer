@@ -1,16 +1,19 @@
 //! Dependencies: no path out of the repository, no other unit's crate, and nothing by git. The warmer calls
-//! no other unit and serves no screen, so not even the base libraries are allowed.
+//! no other unit and serves no screen, so not even the base libraries are allowed. The schedule crate has
+//! no dependency at all, so a consumer that takes it builds the rule alone.
 
 mod support;
 
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use support::{ROOT, files_under, shown};
+use support::{ROOT, files_under, manifest, shown};
 use toml::{Table, Value};
 
 /// The crates of other units this repository may depend on: none.
 const BASE_LIBRARIES: [&str; 0] = [];
+
+/// The schedule crate's directory under the root.
+const SCHEDULE: &str = "schedule";
 
 /// The dependency tables a manifest or a target section may carry.
 const DEPENDENCY_TABLES: [&str; 5] = [
@@ -98,13 +101,33 @@ fn dependencies_stay_in_the_repository_and_name_no_other_unit() {
     .into_iter()
     .filter(|path| path.file_name().is_some_and(|name| name == "Cargo.toml"))
     .flat_map(|path| {
-      let text = fs::read_to_string(&path).expect("a manifest is readable");
-      let manifest: Table = text.parse().unwrap_or_else(|error| panic!("{} reads: {error}", shown(&path)));
       let dir = path.parent().expect("a manifest stands in a directory").to_path_buf();
-      violations(&root, &dir, &manifest, &shown(&path))
+      violations(&root, &dir, &manifest(&path), &shown(&path))
     })
     .collect();
   assert!(found.is_empty(), "these dependencies break the rules: {found:?}");
+}
+
+#[test]
+fn the_schedule_crate_has_no_dependency() {
+  let schedule = manifest(&Path::new(ROOT).join(SCHEDULE).join("Cargo.toml"));
+  let tables = dependency_tables(&schedule);
+  assert!(tables.is_empty(), "the schedule crate declares dependencies: {tables:?}");
+}
+
+#[test]
+fn every_kind_of_dependency_table_is_read() {
+  let manifest: Table = r#"
+    [dependencies]
+    [dev-dependencies]
+    [build-dependencies]
+    [target.'cfg(unix)'.dependencies]
+    [workspace.dependencies]
+    [patch.crates-io]
+  "#
+  .parse()
+  .expect("the sample reads");
+  assert_eq!(dependency_tables(&manifest).len(), 6);
 }
 
 #[test]
