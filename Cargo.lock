@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "bmo-cache-warmer"
-version = "0.1.2"
+version = "0.1.0-rev.2"
 dependencies = [
  "axum",
  "cache-warmer",

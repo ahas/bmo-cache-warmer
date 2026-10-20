@@ -12,10 +12,16 @@ owner's switches and keeps the record of every ping.
 
 ## Versioning
 
-The version is the package's in `Cargo.toml` (semver), starting at 0.1.0; `VERSION` at the root holds
-the same. This document changes in the same commit as the boundary it states. A change to a contract
-an existing consumer reads — a route, a field, its type or meaning, a code — moves the major version;
-an addition no existing consumer reads moves the minor; anything else moves the patch.
+The version is the package's in `Cargo.toml` (semver); `VERSION` at the root holds the same. This
+document changes in the same commit as the boundary it states.
+
+- **Before the first release the version is `0.1.0` and counts revisions.** The first version, `0.1.0`,
+  is the base. Every later version bump is one revision, written `0.1.0-rev.<n>` with `n` counting the
+  bumps since the base from 1. Major, minor and patch do not move before the first release, whatever
+  the change, a breaking one included.
+- **The first release drops the suffix,** and from then on the version moves by semver: a change to a
+  contract an existing consumer reads moves the major version, an addition the minor, anything else
+  the patch.
 
 ## Counterparts
 
