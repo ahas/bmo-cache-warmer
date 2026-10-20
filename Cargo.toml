@@ -1,7 +1,7 @@
-# The workspace: the service package at the root and the schedule crate in `schedule/`, one version for both.
+# The workspace: the service package at the root, which Cargo takes as a member of its own workspace, and the
+# schedule crate in `schedule/`, one version for both.
 [workspace]
-members = [".", "schedule"]
-default-members = [".", "schedule"]
+members = ["schedule"]
 
 [workspace.package]
 version = "0.1.0-rev.5"
@@ -45,6 +45,8 @@ tokio = { version = "1.53.2", features = ["io-std", "macros", "net", "rt", "sync
 toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
+# The personal-data check reads every file for the forms it may not hold.
+regex = "1.13.1"
 # The tests serve the router and a fake consumer on loopback, and drive the ticker on a paused clock.
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["io-std", "macros", "net", "rt", "sync", "test-util", "time"] }

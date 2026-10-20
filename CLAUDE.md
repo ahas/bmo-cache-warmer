@@ -7,7 +7,8 @@ These rules hold every change to this repository.
 - `docs/` is the canonical statement of what the service does; the code is one realisation of it.
   Before changing code, read the document covering that area: `docs/api.md` for the routes, the ping
   hook and the codes, `docs/warming.md` for the pass and the due rule, `docs/store.md` for the
-  tables, their migrations and the snapshot.
+  tables, their migrations and the snapshot, and `docs/PERSONAL-DATA.md` for the personal data no
+  file may hold and the check that reads every file for it.
 - A change that would make a document wrong or incomplete repairs the document first, stating what is
   true now, and the code is written to match. A change to the boundary moves the version as
   `docs/api.md` says, in the same commit.
@@ -51,6 +52,8 @@ These rules hold every change to this repository.
   a machine. Words a person reads in another language are the web console's language packs.
 - No personal data: no user names, home directories, machine names or names of any agent. Names the
   service needs at runtime come from its deployment's environment or arguments, never from the code.
+  The personal-data check in `tests/` holds this over every file, and `docs/PERSONAL-DATA.md` states
+  the rule and the values it allows.
 
 ## Layout
 

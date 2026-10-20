@@ -21,14 +21,15 @@ pub fn manifest(path: &Path) -> Table {
 /// The directory of each member the root manifest's workspace names, the root itself included.
 pub fn members() -> Vec<PathBuf> {
   let root = manifest(&Path::new(ROOT).join("Cargo.toml"));
-  root
+  let listed = root
     .get("workspace")
     .and_then(|workspace| workspace.get("members"))
     .and_then(Value::as_array)
     .expect("the root manifest names the workspace's members")
     .iter()
-    .map(|member| Path::new(ROOT).join(member.as_str().expect("a member is a path")))
-    .collect()
+    .map(|member| Path::new(ROOT).join(member.as_str().expect("a member is a path")));
+  // The root package is a member of its own workspace whether or not the manifest lists it.
+  std::iter::once(Path::new(ROOT).to_path_buf()).chain(listed).collect()
 }
 
 /// Directories no check reads: build output and git's own.

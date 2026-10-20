@@ -34,6 +34,7 @@ At the root stand the workspace's Cargo manifest, which is also the service pack
 | `docs/openapi.json` | The contract as an OpenAPI 3.1 document, written from the code |
 | `docs/warming.md` | The pass, when a target is due, groups, what each answer leaves behind, the switches, and the policy |
 | `docs/store.md` | What the store keeps, how its shape moves, and how a snapshot of it is taken, checked and put back |
+| `docs/PERSONAL-DATA.md` | The personal data no file of the repository may hold, what goes in its place, and the check that reads every file for it |
 
 ## Version
 
