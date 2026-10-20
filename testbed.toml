@@ -39,14 +39,16 @@ fi
 '''
 
 # The binary, linked into the folder holding `bmo`, so a harness starts the MCP server as
-# `bmo-cache-warmer mcp` (docs/api.md, "The deployed service").
+# `bmo-cache-warmer mcp` (docs/api.md, "The deployed service"). The link names this repository's deploy
+# tree, whose own link stands across releases; a link made to the release being deployed would dangle
+# once a later deployment prunes that release.
 [[deploy.step]]
 id = "link-unit-command"
 phase = "before-flip"
 command = '''
 set -eu
 bmo_dir="$(dirname "$(command -v bmo)")"
-ln -sfn "$PWD/bin/bmo-cache-warmer" "$bmo_dir/bmo-cache-warmer"
+ln -sfn "$HOME/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer" "$bmo_dir/bmo-cache-warmer"
 '''
 
 # A deployment backs the store up before anything changes (docs/api.md, "The deployed service"). The
