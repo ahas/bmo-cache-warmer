@@ -4,8 +4,9 @@ members = [".", "schedule"]
 default-members = [".", "schedule"]
 
 [workspace.package]
-version = "0.1.0-rev.4"
+version = "0.1.0-rev.5"
 edition = "2024"
+license = "MIT"
 
 # The service package: the service with its client, its OpenAPI document and the harness plugin's MCP
 # server, and the one binary that serves, answers the plugin and takes snapshots. The repository checks and
@@ -15,6 +16,7 @@ name = "bmo-cache-warmer"
 description = "A keepalive scheduler: keeps registered prompt-cache prefixes warm by asking their consumers to ping them."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

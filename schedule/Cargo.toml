@@ -5,4 +5,4 @@ name = "bmo-cache-warmer-schedule"
 description = "The keepalive schedule's rule: when a kept prompt-cache prefix is due a ping, and in what order a pass pings."
 version.workspace = true
 edition.workspace = true
-publish = false
+license.workspace = true

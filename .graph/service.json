@@ -19,7 +19,7 @@
       "store/store",
       "service/policy"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802614
   },
   {
@@ -40,7 +40,7 @@
     "needs": [
       "service/wire"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802604
   },
   {
@@ -64,7 +64,7 @@
       "store/store",
       "schedule/rule"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802601
   },
   {
@@ -91,8 +91,8 @@
       "service/client",
       "service/wire"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
-    "changed": 1792498802606
+    "base": "ba2aacab5c1b179d0d304d6821fbff3f2af0ab0f",
+    "changed": 1792510649874
   },
   {
     "id": "service/openapi",
@@ -114,7 +114,7 @@
       "service/wire",
       "service/mcp"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802609
   },
   {
@@ -139,7 +139,7 @@
       "store/store",
       "service/policy"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802594
   },
   {
@@ -159,7 +159,7 @@
     "needs": [
       "schedule/rule"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802591
   },
   {
@@ -179,7 +179,7 @@
     "needs": [
       "service/pass"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802596
   },
   {
@@ -205,7 +205,7 @@
     "needs": [
       "store/store"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802599
   }
 ]

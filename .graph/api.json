@@ -15,7 +15,7 @@
       "store/snapshot",
       "api/mcp"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802625,
     "boundary": {
       "side": "exposes"
@@ -40,7 +40,7 @@
       "service/client",
       "api/http"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802620,
     "boundary": {
       "side": "exposes"
@@ -65,7 +65,7 @@
       "service/wire",
       "service/pass"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802618,
     "boundary": {
       "side": "exposes"
@@ -89,8 +89,8 @@
       "service/mcp",
       "service/client"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
-    "changed": 1792498802622,
+    "base": "ba2aacab5c1b179d0d304d6821fbff3f2af0ab0f",
+    "changed": 1792510649874,
     "boundary": {
       "side": "exposes"
     }
@@ -118,7 +118,7 @@
     "needs": [
       "schedule/rule"
     ],
-    "base": "711d55119265087faaf06b67a1ff88ec72e934be",
+    "base": "473adfaacb0bfe36c8b3b1ab081aaa980a00395d",
     "changed": 1792498802616,
     "boundary": {
       "side": "exposes"
