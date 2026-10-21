@@ -13,7 +13,7 @@ with no dependency.
 
 | Folder | Holds |
 |---|---|
-| `.graph/` | The code dependency graph: one node per feature, the files it is made of, and the APIs the repository exposes |
+| `.graph/` | The code dependency graph: one node per feature, the files it is made of, and the APIs the repository exposes. Its area files are generated in the checkout and untracked, so a fresh checkout builds them again, while `settings.toml` is the repository's configuration and stays tracked |
 | `src/` | The service package: the service, its client, OpenAPI document and MCP server, and the binary |
 | `schedule/` | The schedule crate: the due rule and the plan, with its own tests |
 | `examples/` | The program that prints the OpenAPI document the repository keeps |
