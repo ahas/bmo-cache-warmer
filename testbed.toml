@@ -7,7 +7,9 @@ languages = ["cargo"]
 
 [check]
 quick = ["layout", "dependencies", "korean"]
-# No code file holds Korean, so the ledger allows none anywhere.
+# The ledger allows the two test files whose input is a letter of another script, a line each: the
+# Greek a schedule test cuts by character, and the Hangul block the Hangul check names. No other file
+# holds any.
 korean_ledger = "korean-ledger.json"
 # The warmer calls no other unit and serves no screen, so no other repository is a dependency.
 base_libraries = []

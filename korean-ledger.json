@@ -1,1 +1,4 @@
-{}
+{
+  "schedule/tests/schedule.rs": 1,
+  "tests/hangul.rs": 1
+}
