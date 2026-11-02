@@ -23,14 +23,14 @@ autotests = false
 
 [dependencies]
 # The service's routes and its event stream.
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+axum = { version = "0.8.9", features = ["macros", "multipart", "ws"] }
 # The schedule rule, re-exported as `schedule`.
 bmo-cache-warmer-schedule = { path = "schedule" }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 # The event stream's body.
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 # The pings to consumers' hooks and the client's calls to the service.
-reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+reqwest = { version = "0.13.5", features = ["json", "query", "stream"] }
 # The harness plugin's MCP server.
 rmcp = { version = "3.5.0", default-features = false, features = ["server", "transport-io"] }
 # The JSON Schemas of the bodies, the tools' inputs and outputs and the OpenAPI document.
@@ -43,7 +43,7 @@ serde_json = { version = "1.0.138", features = ["preserve_order"] }
 sha2 = "0.10.9"
 sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["io-std", "macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
 toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
@@ -51,7 +51,7 @@ toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 regex = "1.13.1"
 # The tests serve the router and a fake consumer on loopback, and drive the ticker on a paused clock.
 tempfile = "3.27.0"
-tokio = { version = "1.53.2", features = ["io-std", "macros", "net", "rt", "sync", "test-util", "time"] }
+tokio = { version = "1.53.3", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
 
 [[test]]
 name = "main"
