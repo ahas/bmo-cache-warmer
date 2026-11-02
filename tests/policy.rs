@@ -9,8 +9,6 @@ start_delay_seconds = 30
 tick_seconds = 60
 warm_by_default = false
 idle_percent = 66
-ping_bound_seconds = 120
-ping_slack_seconds = 15
 reason_units = 400
 log_days = 14
 event_days = 2
@@ -23,8 +21,6 @@ fn the_built_in_policy_reads_as_documented() {
   assert_eq!(policy.start_delay(), Duration::from_secs(30));
   assert_eq!(policy.tick(), Duration::from_secs(60));
   assert_eq!(policy.tick_ms(), 60_000);
-  assert_eq!(policy.ping_slack(), Duration::from_secs(15));
-  assert_eq!(policy.ping_bound_ms(), 120_000);
   assert_eq!(policy.log_keep_ms(), 14 * 24 * 60 * 60 * 1000);
   assert_eq!(policy.event_keep_ms(), 2 * 24 * 60 * 60 * 1000);
 }
@@ -59,7 +55,6 @@ fn a_zero_where_one_must_be_above_it_is_refused_and_so_is_a_share_over_the_whole
   for (stated, key) in [
     ("tick_seconds = 60", "tick_seconds"),
     ("idle_percent = 66", "idle_percent"),
-    ("ping_bound_seconds = 120", "ping_bound_seconds"),
     ("reason_units = 400", "reason_units"),
     ("log_days = 14", "log_days"),
     ("event_days = 2", "event_days"),

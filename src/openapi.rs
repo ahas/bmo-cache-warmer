@@ -38,7 +38,7 @@ const CODES: &[(&str, u16, &str)] = &[
   ("unauthorized", 401, "the bearer token is missing or wrong"),
   ("no-route", 404, "no route answers this method and path"),
   ("not-found", 404, "nothing stands at the names the path gives"),
-  ("conflict", 409, "a target still names the group, or a pass is already running"),
+  ("conflict", 409, "a target still names the group"),
   ("gone", 410, "the events past the cursor asked for are no longer kept"),
   ("invalid-url", 422, "the hook URL does not parse or is not http"),
   ("invalid-clock", 422, "a span or a time is out of its range"),
@@ -314,7 +314,7 @@ fn routes(generator: &mut SchemaGenerator) -> Vec<Route> {
       parameters: Vec::new(),
       body: Some(schema_of::<PassBody>(generator)),
       answer: (201, Some(json_of::<Pass>(generator))),
-      codes: vec!["conflict", "invalid-clock"],
+      codes: vec!["invalid-clock"],
     },
   ]
 }

@@ -73,7 +73,7 @@ pub fn line(subject: &str) -> Registration {
       failure_touches: true,
       honours_idle_override: true,
     },
-    ping_bound_ms: 90_000,
+    ping_bound_ms: Some(90_000),
     group: None,
     warm_by_default: Some(true),
     last_used_at: None,
@@ -88,7 +88,7 @@ pub fn place(subject: &str, group: &str) -> Registration {
   registration.clocks.margin_ms = 5 * MINUTE;
   registration.clocks.failure_touches = false;
   registration.clocks.honours_idle_override = false;
-  registration.ping_bound_ms = 120_000;
+  registration.ping_bound_ms = Some(120_000);
   registration.group = Some(group.into());
   registration
 }

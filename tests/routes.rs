@@ -259,7 +259,7 @@ async fn a_target_is_registered_with_the_policy_filling_what_it_leaves_out() {
     json!({
       "id": id, "consumerName": "alpha", "name": "line", "kind": null, "label": null, "subjectName": "line",
       "rank": 0, "groupName": null, "ttlMs": 3_600_000, "idleMs": 2_376_000, "marginMs": 0,
-      "pingBoundMs": 120_000, "warmByDefault": false, "failureTouches": false, "honoursIdleOverride": true,
+      "pingBoundMs": null, "warmByDefault": false, "failureTouches": false, "honoursIdleOverride": true,
       "on": false, "pausedUntil": null, "usedAt": null, "warmedAt": null, "failedAt": null,
       "lastAttempt": null, "nextPingAt": null,
     })
@@ -512,7 +512,7 @@ async fn the_round_answers_its_interval_and_next_time_and_changes_by_merge_patch
 }
 
 #[tokio::test]
-async fn a_pass_asked_for_runs_now_and_one_already_running_is_refused() {
+async fn a_pass_asked_for_runs_now_beside_one_already_running() {
   let served = served().await;
   let held = Arc::new(tokio::sync::Notify::new());
   let arrived = Arc::new(tokio::sync::Notify::new());
@@ -540,7 +540,10 @@ async fn a_pass_asked_for_runs_now_and_one_already_running_is_refused() {
     async move { http.post(format!("{base}/passes")).bearer_auth(TOKEN).send().await.unwrap() }
   });
   arrived.notified().await;
-  assert_eq!(refused(served.call(Method::POST, "/passes", None).await), code(409, "conflict"));
+  // The pass beside the first runs and ends at once: the only consumer's line is the first pass's.
+  let (status, beside) = served.call(Method::POST, "/passes", None).await;
+  assert_eq!(status, StatusCode::CREATED);
+  assert_eq!(beside["pingedCount"], 0);
   held.notify_one();
   let answer = first.await.unwrap();
   assert_eq!(answer.status(), StatusCode::CREATED);

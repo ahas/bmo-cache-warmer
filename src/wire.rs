@@ -231,8 +231,8 @@ pub struct Target {
   pub idle_ms: i64,
   /// Taken off `ttlMs` before judging.
   pub margin_ms: i64,
-  /// How long the consumer may take to answer one ping.
-  pub ping_bound_ms: i64,
+  /// The stretch its consumer keeps for its own reading of a ping, as registered.
+  pub ping_bound_ms: Option<i64>,
   /// Whether it warms while its subject's switch is unset.
   pub warm_by_default: bool,
   pub failure_touches: bool,
@@ -297,7 +297,8 @@ pub struct TargetBody {
   /// Taken off `ttlMs` before judging, 0 or more; 0 when absent.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub margin_ms: Option<i64>,
-  /// How long the consumer may take to answer one ping, above 0; the policy's bound when absent.
+  /// A stretch the consumer keeps for its own reading of a ping, above 0, handed back in each ping; the
+  /// warmer bounds nothing by it.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub ping_bound_ms: Option<i64>,
   /// The subject it is switched by; the target's own name when absent.
@@ -458,7 +459,8 @@ pub struct Pass {
   pub pinged_count: i64,
   /// Whether it found the round stopped, so what remained was not pinged.
   pub stopped: bool,
-  /// One per ping, in the order they went.
+  /// One per ping, each consumer's in the order they went, the consumers in the order of their first target
+  /// in the pass.
   pub attempts: Vec<PassAttempt>,
 }
 
@@ -481,8 +483,9 @@ pub struct TargetPing {
   pub kind: Option<String>,
   /// When the target fell due.
   pub due_at: i64,
-  /// How long the consumer has to answer.
-  pub bound_ms: i64,
+  /// The target's `pingBoundMs`, where it registered one.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub bound_ms: Option<i64>,
 }
 
 /// What a consumer's target-ping hook answers with a 200.

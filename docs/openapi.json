@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "bmo-cache-warmer",
-    "version": "0.1.0-rev.5",
+    "version": "0.1.0-rev.6",
     "description": "A keepalive scheduler for prompt caches: consumers register targets (cached prefixes), record each use, and are asked to ping a target before its cache runs out. Asking is the target-ping webhook each consumer serves at the URL it registered; the service names no consumer and calls no other service. Bodies are JSON with camelCase keys; times are integers of epoch milliseconds. A list is a page in id order, `after` being the id of the last item read. Every failure is answered in the error shape with its status. The harness plugin's tools, each a thin call of one route, are stated under `x-tools`."
   },
   "servers": [
@@ -868,7 +868,6 @@
         "x-codes": [
           "unauthorized",
           "bad-request",
-          "conflict",
           "invalid-clock",
           "failed"
         ],
@@ -1174,9 +1173,12 @@
             "description": "Taken off `ttlMs` before judging."
           },
           "pingBoundMs": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "How long the consumer may take to answer one ping."
+            "description": "The stretch its consumer keeps for its own reading of a ping, as registered."
           },
           "warmByDefault": {
             "type": "boolean",
@@ -1252,7 +1254,6 @@
           "ttlMs",
           "idleMs",
           "marginMs",
-          "pingBoundMs",
           "warmByDefault",
           "failureTouches",
           "honoursIdleOverride",
@@ -1330,7 +1331,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "How long the consumer may take to answer one ping, above 0; the policy's bound when absent."
+            "description": "A stretch the consumer keeps for its own reading of a ping, above 0, handed back in each ping; the\nwarmer bounds nothing by it."
           },
           "subjectName": {
             "type": [
@@ -1630,7 +1631,7 @@
             "items": {
               "$ref": "#/components/schemas/PassAttempt"
             },
-            "description": "One per ping, in the order they went."
+            "description": "One per ping, each consumer's in the order they went, the consumers in the order of their first target\nin the pass."
           }
         },
         "required": [
@@ -1702,17 +1703,19 @@
             "description": "When the target fell due."
           },
           "boundMs": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "How long the consumer has to answer."
+            "description": "The target's `pingBoundMs`, where it registered one."
           }
         },
         "required": [
           "consumerName",
           "targetName",
           "subjectName",
-          "dueAt",
-          "boundMs"
+          "dueAt"
         ],
         "description": "What the warmer posts to a consumer's target-ping hook."
       },
@@ -1764,7 +1767,7 @@
     },
     "responses": {
       "Error": {
-        "description": "A failure, in the common error shape. The codes:\n- `bad-request` (400): the body, the query or a name in the path is not the shape the route takes\n- `unauthorized` (401): the bearer token is missing or wrong\n- `no-route` (404): no route answers this method and path\n- `not-found` (404): nothing stands at the names the path gives\n- `conflict` (409): a target still names the group, or a pass is already running\n- `gone` (410): the events past the cursor asked for are no longer kept\n- `invalid-url` (422): the hook URL does not parse or is not http\n- `invalid-clock` (422): a span or a time is out of its range\n- `invalid-kind` (422): the kind is not a kind word\n- `unknown-group` (422): the registration names no group of the consumer\n- `failed` (500): the store could not be read or written",
+        "description": "A failure, in the common error shape. The codes:\n- `bad-request` (400): the body, the query or a name in the path is not the shape the route takes\n- `unauthorized` (401): the bearer token is missing or wrong\n- `no-route` (404): no route answers this method and path\n- `not-found` (404): nothing stands at the names the path gives\n- `conflict` (409): a target still names the group\n- `gone` (410): the events past the cursor asked for are no longer kept\n- `invalid-url` (422): the hook URL does not parse or is not http\n- `invalid-clock` (422): a span or a time is out of its range\n- `invalid-kind` (422): the kind is not a kind word\n- `unknown-group` (422): the registration names no group of the consumer\n- `failed` (500): the store could not be read or written",
         "content": {
           "application/json": {
             "schema": {
@@ -1903,7 +1906,7 @@
             "format": "int64"
           },
           "pingBoundMs": {
-            "description": "How long the consumer may take to answer one ping, above 0; the policy's bound when absent.",
+            "description": "A stretch the consumer keeps for its own reading of a ping, above 0, handed back in each ping; the\nwarmer bounds nothing by it.",
             "type": [
               "integer",
               "null"

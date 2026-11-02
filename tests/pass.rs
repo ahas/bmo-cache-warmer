@@ -11,7 +11,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, post};
 use axum::{Json, Router};
-use bmo_cache_warmer::pass::{PassError, Warmer};
+use bmo_cache_warmer::pass::Warmer;
 use bmo_cache_warmer::policy::Policy;
 use bmo_cache_warmer::store::{Attempt, Outcome, Pause, Registration, RoundChange, Store, SubjectChange};
 use bmo_cache_warmer::wire::Pass;
@@ -106,6 +106,7 @@ struct Bench {
   store: Store,
   clock: Arc<TestClock>,
   consumer: Arc<Consumer>,
+  hook_url: String,
 }
 
 async fn bench() -> Bench {
@@ -132,6 +133,7 @@ async fn bench() -> Bench {
     store,
     clock,
     consumer,
+    hook_url,
   }
 }
 
@@ -236,6 +238,19 @@ async fn due_targets_are_pinged_in_rank_order_with_their_ping() {
   );
   // A target used before is due an idle stretch after its use.
   assert_eq!(heard[3]["dueAt"], NOW - MINUTE);
+}
+
+#[tokio::test]
+async fn a_ping_hands_back_a_stretch_only_where_one_was_registered() {
+  let bench = bench().await;
+  let mut bare = line("session");
+  bare.ping_bound_ms = None;
+  bench.register("bare", bare).await;
+
+  bench.warmer().await.pass(None).await.expect("a pass");
+  let heard = bench.consumer.heard.lock().expect("the log of pings").clone();
+  assert_eq!(heard.len(), 1);
+  assert!(heard[0].get("boundMs").is_none(), "{}", heard[0]);
 }
 
 #[tokio::test]
@@ -356,22 +371,49 @@ async fn a_hook_nobody_listens_on_is_unreachable() {
   assert_eq!(pass.attempts[0].consumer_name, "gone");
 }
 
-#[tokio::test]
-async fn a_hook_silent_past_its_bound_times_out_and_the_pass_goes_on() {
-  let bench = bench().await;
-  let mut silent = line("a");
-  silent.ping_bound_ms = 1;
-  bench.register("silent", silent).await;
-  bench.register("then", line("b")).await;
-  bench.script("silent", Vec::new(), Reply::Never);
-  let mut policy = Policy::builtin().expect("the built-in policy");
-  policy.ping_slack_seconds = 0;
+/// Two notices for one held reply: the ping has arrived, and the hook may answer.
+fn held() -> (Arc<Notify>, Arc<Notify>, Reply) {
+  let (arrived, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+  let reply = Reply::Held {
+    arrived: arrived.clone(),
+    release: release.clone(),
+  };
+  (arrived, release, reply)
+}
 
-  let pass = bench.warmer_with(policy).await.pass(None).await.expect("a pass");
-  assert_eq!(pinged(&pass), vec!["silent", "then"]);
-  assert_eq!(pass.attempts[0].code.as_deref(), Some("hook-timeout"));
-  assert_eq!(pass.attempts[0].reason.as_deref(), Some("The hook did not answer within 1 ms."));
-  assert_eq!(bench.last("then").await.outcome, Outcome::Warmed);
+#[tokio::test]
+async fn a_hook_that_never_answers_holds_its_own_line_and_no_other() {
+  let bench = bench().await;
+  bench.store.put_consumer("beta", &bench.hook_url, NOW).await.expect("a second consumer");
+  bench.register("silent", line("a")).await;
+  bench.register("tail", line("c")).await;
+  bench.store.put_target("beta", "then", &line("b")).await.expect("a target of beta");
+  bench.script("silent", Vec::new(), Reply::Never);
+  let (arrived, release, reply) = held();
+  bench.script("then", Vec::new(), reply);
+  let warmer = Arc::new(bench.warmer().await);
+  let mut published = warmer.published();
+
+  let pass = tokio::spawn({
+    let warmer = warmer.clone();
+    async move { warmer.pass(None).await }
+  });
+  // Beta's ping arrives while alpha's first is still out, and is answered.
+  arrived.notified().await;
+  release.notify_one();
+  let then = loop {
+    let target = bench.store.target("beta", "then").await.expect("the target").expect("it stands");
+    if let Some(attempt) = target.last_attempt {
+      break attempt;
+    }
+    published.changed().await.expect("the warmer stands");
+  };
+  assert_eq!(then.outcome, Outcome::Warmed);
+
+  // Alpha's line waits on its silent hook: its next target has not been pinged, and the pass has not ended.
+  assert!(!bench.heard().iter().any(|name| name == "tail"));
+  assert!(!pass.is_finished());
+  pass.abort();
 }
 
 #[tokio::test]
@@ -536,34 +578,25 @@ async fn a_pass_ends_by_pruning_the_log_and_the_window_to_their_days_even_when_s
 }
 
 #[tokio::test]
-async fn a_pass_asked_for_while_one_runs_is_refused_and_a_waiting_one_runs_after() {
+async fn a_pass_beside_one_running_passes_over_the_line_it_holds() {
   let bench = bench().await;
   bench.register("line", line("session")).await;
-  let (arrived, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-  bench.script(
-    "line",
-    Vec::new(),
-    Reply::Held {
-      arrived: arrived.clone(),
-      release: release.clone(),
-    },
-  );
+  let (arrived, release, reply) = held();
+  bench.script("line", Vec::new(), reply);
   let warmer = Arc::new(bench.warmer().await);
 
   let running = tokio::spawn({
     let warmer = warmer.clone();
-    async move { warmer.try_pass(None).await }
-  });
-  arrived.notified().await;
-  assert!(matches!(warmer.try_pass(None).await, Err(PassError::Running)));
-  let waiting = tokio::spawn({
-    let warmer = warmer.clone();
     async move { warmer.pass(None).await }
   });
+  arrived.notified().await;
+  let beside = warmer.pass(None).await.expect("a pass beside the first");
+  assert!(beside.attempts.is_empty());
 
   release.notify_one();
   let first = running.await.expect("the first pass ends").expect("a pass");
   assert_eq!(pinged(&first), vec!["line"]);
-  let second = waiting.await.expect("the waiting pass ends").expect("a pass");
-  assert!(second.attempts.is_empty());
+  // The line given back, the next pass judges the record its ping wrote.
+  let after = warmer.pass(None).await.expect("a pass after");
+  assert!(after.attempts.is_empty());
 }

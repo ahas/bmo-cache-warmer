@@ -1,6 +1,7 @@
 //! The ticker (docs/warming.md, "The pass"): the first pass a start delay after the service starts, then
-//! one every interval of the round, never two at once and never run twice to catch up; and the beat it
-//! keeps, which says when the next pass comes and takes a new interval while it runs.
+//! one every interval of the round, each started without waiting for the one before and never run twice to
+//! catch up; and the beat it keeps, which says when the next pass comes and takes a new interval while it
+//! runs.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -93,14 +94,18 @@ where
   }
 }
 
-/// Runs the warmer's passes on its round's beat for as long as the service runs. A pass asked for over the
-/// routes and still running is waited for; a pass the store fails is written to standard error and the
-/// next comes as usual.
+/// Runs the warmer's passes on its round's beat for as long as the service runs. Each pass is started on its
+/// own and not waited for, so a pass whose lines are still out never holds back the next; a pass the store
+/// fails is written to standard error and the next comes as usual.
 pub async fn warm(warmer: Arc<Warmer>) -> ! {
-  run_ticks(warmer.beat(), || async {
-    if let Err(error) = warmer.pass(None).await {
-      eprintln!("A pass ended early. {error}");
-    }
+  run_ticks(warmer.beat(), || {
+    let warmer = warmer.clone();
+    tokio::spawn(async move {
+      if let Err(error) = warmer.pass(None).await {
+        eprintln!("A pass ended early. {error}");
+      }
+    });
+    std::future::ready(())
   })
   .await
 }

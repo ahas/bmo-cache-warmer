@@ -30,9 +30,9 @@ every tool with a 401 `unauthorized` error.
    registered under one of them; registering a consumer is its own service's work, through the service's API.
 2. `warmer_target_put` with `consumerName`, `targetName` and `ttlMs`, the provider's cache lifetime for the
    prefix in milliseconds. Leave the rest out unless you know better: `idleMs` (how long it may stand idle
-   before a ping) defaults to a share of the lifetime, `pingBoundMs` to the warmer's bound, `subjectName` to
-   the target's own name. Give `warmByDefault: true` where the target should warm without a switch being
-   thrown first; the warmer's default is off. Restating a target keeps its record.
+   before a ping) defaults to a share of the lifetime, `subjectName` to the target's own name. Give
+   `warmByDefault: true` where the target should warm without a switch being thrown first; the warmer's
+   default is off. Restating a target keeps its record.
 3. `warmer_target_used` after each request that read or wrote the prefix, with `consumerName` and
    `targetName`. `at` (when the prefix was last written) and `startedAt` (when the work began) default to now.
    A use moves the target's clock, so the warmer does not ping a prefix that is in use.

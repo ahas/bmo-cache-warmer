@@ -132,7 +132,8 @@ A page of every target. Query `consumerName` and `subjectName` narrow it. Each:
 | `subjectName` | string | as registered, or the target's own name |
 | `rank` | int | its place in the pass: lower goes first |
 | `groupName?` | string | as registered |
-| `ttlMs`, `idleMs`, `marginMs`, `pingBoundMs` | int | its clocks as registered, or as the policy filled them in |
+| `ttlMs`, `idleMs`, `marginMs` | int | its clocks as registered, or as the policy filled them in |
+| `pingBoundMs?` | int | as registered |
 | `warmByDefault` | bool | as registered, or the policy's default |
 | `failureTouches`, `honoursIdleOverride` | bool | as registered |
 | `on` | bool | whether it warms now: its subject's switch where set, else `warmByDefault` |
@@ -155,7 +156,7 @@ record and the subject's switches; the clocks the next judgement reads are the r
 | `ttlMs` | int | how long the provider keeps the prefix after its last touch, 0 or more |
 | `idleMs?` | int | how long it may stand idle before a ping is due, above 0; the policy's share of its usable lifetime when absent |
 | `marginMs?` | int | taken off `ttlMs` before judging, 0 or more; 0 when absent |
-| `pingBoundMs?` | int | how long the consumer may take to answer one ping, above 0; the policy's bound when absent |
+| `pingBoundMs?` | int | a stretch the consumer keeps for its own reading of a ping, above 0, handed back in each ping as `boundMs`; the warmer bounds nothing by it |
 | `subjectName?` | string | the subject it is switched by; the target's own name when absent |
 | `groupName?` | string | the group it is in |
 | `rank?` | int | its place in the pass; 0 when absent |
@@ -239,18 +240,19 @@ before its next ping. 422 `invalid-clock` for an interval not above 0.
 
 ### POST `/passes`
 
-Runs one pass now and answers once it ends. The body may be left out: `idleOverrideMs?`, used instead
-of `idleMs` for every target that honours it, above 0. Answers 201 with the pass:
+Runs one pass now, beside any pass already running, and answers once it ends: once every consumer
+line it claimed has come back, however long their hooks take (`docs/warming.md`, 「The pass」). The
+body may be left out: `idleOverrideMs?`, used instead of `idleMs` for every target that honours it,
+above 0. Answers 201 with the pass:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `at` | int | when it ended |
 | `pingedCount` | int | how many pings went |
 | `stopped` | bool | whether it found the round stopped, at its start or before one of its pings, so what remained was not pinged |
-| `attempts` | object[] | one per ping in the order they went: `consumerName`, `targetName`, `at`, `outcome`, `code?`, `reason?` |
+| `attempts` | object[] | one per ping, each consumer's in the order they went, the consumers in the order of their first target in the pass: `consumerName`, `targetName`, `at`, `outcome`, `code?`, `reason?` |
 
-409 `conflict` while a pass, the ticker's or another caller's, is running; 422 `invalid-clock` for an
-override not above 0.
+422 `invalid-clock` for an override not above 0.
 
 ## Events
 
@@ -286,11 +288,11 @@ warmer posts to its consumer's `url` directly, through no proxy, and follows no 
 | `subjectName` | string | as registered |
 | `kind?` | string | as registered |
 | `dueAt` | int | when the target fell due |
-| `boundMs` | int | the target's `pingBoundMs`: how long the consumer has to answer |
+| `boundMs?` | int | the target's `pingBoundMs`, where it registered one |
 
-The warmer waits `boundMs` plus the policy's slack. The consumer does the warming, puts the ping on
-the line the target's work runs on, and answers 204 when the prefix was read and written again, or
-200 with:
+The warmer waits for the answer however long the consumer takes: no clock ends a ping. The consumer
+does the warming, puts the ping on the line the target's work runs on, and answers 204 when the
+prefix was read and written again, or 200 with:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -309,14 +311,13 @@ the line the target's work runs on, and answers 204 when the prefix was read and
 Busy and skipped answers move nothing but the last attempt. A failed one moves the target's touch
 only where it registered `failureTouches` (`docs/warming.md`).
 
-When the hook does not answer in time, cannot be reached, answers another status, or answers a body
-that does not read as above, the warmer records `failed` with one of these codes and an English
+When the hook cannot be reached, breaks off before its answer, answers another status, or answers a
+body that does not read as above, the warmer records `failed` with one of these codes and an English
 reason of its own:
 
 | Code | Meaning |
 | --- | --- |
-| `hook-timeout` | the hook did not answer within its bound and the slack |
-| `hook-unreachable` | the hook URL could not be connected to, or the request broke off before an answer came |
+| `hook-unreachable` | the hook URL could not be connected to, or the request broke off before an answer came, the hook's host gone included |
 | `hook-status` | the hook answered a status other than 200 or 204, a redirect included |
 | `hook-answer` | the hook's body did not read as an answer, or a skipped answer carried no kind word as its code, or a failed one no reason |
 
@@ -328,7 +329,7 @@ reason of its own:
 | `unauthorized` | 401 | the bearer token is missing or wrong |
 | `no-route` | 404 | no route answers this method and path |
 | `not-found` | 404 | nothing stands at the names the path gives |
-| `conflict` | 409 | a target still names the group, or a pass is already running |
+| `conflict` | 409 | a target still names the group |
 | `gone` | 410 | the events past the cursor asked for are no longer kept |
 | `invalid-url` | 422 | the hook URL does not parse or is not `http` |
 | `invalid-clock` | 422 | a span or a time is out of its range |
@@ -341,7 +342,8 @@ reason of its own:
 The module `client` of the package is the service's client: one method for each route, sending and
 reading the bodies `docs/openapi.json` states, a refusal read back as its status, code and sentence.
 It carries the contract and no caller's policy. It is built with the address and the token, and
-reaches the service through no proxy.
+reaches the service through no proxy. A call waits for its answer however long the service takes, a
+pass asked for included; it ends short of one only where the connection is refused or breaks.
 
 ## The schedule crate
 

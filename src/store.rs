@@ -3,6 +3,7 @@
 //! Every time it writes is handed in by the caller.
 
 use std::path::Path;
+use std::time::Duration;
 
 use sea_orm::{
   ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryResult, RuntimeErr,
@@ -112,7 +113,9 @@ pub struct Registration {
   pub rank: i64,
   /// Its clocks, a lifetime always declared.
   pub clocks: Clocks,
-  pub ping_bound_ms: i64,
+  /// The stretch the consumer keeps for its own reading of a ping, handed back in each; none where it
+  /// declared none.
+  pub ping_bound_ms: Option<i64>,
   pub group: Option<String>,
   pub warm_by_default: Option<bool>,
   /// The last use the consumer knows, taken only where later than the record's.
@@ -144,7 +147,7 @@ pub struct Target {
   pub subject: String,
   pub rank: i64,
   pub clocks: Clocks,
-  pub ping_bound_ms: i64,
+  pub ping_bound_ms: Option<i64>,
   /// The group it is in, with that group's limit.
   pub group: Option<PlannedGroup>,
   /// As registered; none where the registration said nothing.
@@ -416,9 +419,17 @@ async fn one_group(db: &impl ConnectionTrait, consumer: &str, group: &str) -> Re
 impl Store {
   /// The store in the SQLite file at `path`, created where missing and migrated to the latest shape.
   pub async fn open(path: &Path) -> Result<Self, StoreError> {
-    let options = SqliteConnectOptions::new().filename(path).create_if_missing(true).foreign_keys(true);
+    // A statement waits for another connection's lock, and a call for a free connection, until the holder
+    // gives it back: the lock's wait is the longest SQLite takes and the connection's a span no service
+    // lives through, so no clock ends store work.
+    let options = SqliteConnectOptions::new()
+      .filename(path)
+      .create_if_missing(true)
+      .foreign_keys(true)
+      .busy_timeout(Duration::from_millis(i32::MAX.unsigned_abs().into()));
     let pool = SqlitePoolOptions::new()
       .max_connections(4)
+      .acquire_timeout(Duration::from_secs(u32::MAX.into()))
       .connect_with(options)
       .await
       .map_err(|error| DbErr::Conn(RuntimeErr::SqlxError(error)))?;

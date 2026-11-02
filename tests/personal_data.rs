@@ -123,7 +123,7 @@ fn every_form_finds_its_own_and_passes_the_ordinary() {
     key_line,
     format!("serve on {private}"),
     "the loopback 127.0.0.1:7841 is ordinary".to_owned(),
-    "version 0.1.0-rev.5".to_owned(),
+    "version 0.1.0-rev.6".to_owned(),
   ]
   .join("\n");
   assert_eq!(

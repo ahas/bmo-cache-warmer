@@ -2,8 +2,6 @@
 //! bodies `docs/openapi.json` states, and a refusal read back as its status, code and sentence. It carries
 //! the contract and no caller's policy.
 
-use std::time::Duration;
-
 use reqwest::{Method, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,9 +14,6 @@ use crate::wire::{
 
 /// The address the deployed service listens at, where a caller names none.
 pub const DEFAULT_ADDRESS: &str = "http://127.0.0.1:9023";
-
-/// How long one call waits for its answer; a pass asked for waits on every ping it makes.
-const PATIENCE: Duration = Duration::from_secs(600);
 
 /// Why a call came to no answer of the route's shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,9 +81,9 @@ impl WarmerClient {
       .ok()
       .filter(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
       .ok_or_else(|| ClientFailure::Unreached(format!("{address} is not an absolute http URL")))?;
+    // A call waits for its answer however long the service takes, a pass asked for included.
     let http = reqwest::Client::builder()
       .no_proxy()
-      .timeout(PATIENCE)
       .build()
       .map_err(|why| ClientFailure::Unreached(why.to_string()))?;
 

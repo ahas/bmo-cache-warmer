@@ -16,23 +16,31 @@ or the round ends its warming.
   the round: the one set over `PATCH /round`, or the policy's tick (60 seconds) while none is. A new
   interval moves the next pass to the last pass's time plus the new interval, or to now where that has
   passed.
-- **Never beside itself.** One pass runs at a time. A pass that outruns its interval puts the next off
-  until it ends; the next then comes at once and the one after a whole interval later, so missed
-  passes are never run to catch up. A pass asked for over `POST /passes` while one runs is refused.
+- **Passes come on the beat.** Each pass starts when the beat says it is due, whether or not an
+  earlier pass has ended, so passes may stand side by side. A pass asked for over `POST /passes` runs beside any other.
 - **A failed pass is not the end.** A pass the store fails is written to standard error, and the next
   one comes as usual.
 - **The round first.** While the round is not running, a pass judges nothing and pings nothing.
-- **One target at a time, in rank order.** The pass walks targets by the rank each registration
-  declares, lowest first, then by consumer and target name; the order is stable from pass to pass.
-  It waits for each ping's answer before the next.
-- **Checked again before each ping.** Just before it posts a ping, the pass reads the round, the
+- **Each consumer has one line.** A consumer's pings go one at a time on its line, each waiting for
+  its answer. The lines of different consumers run side by side, so a consumer slow to answer holds
+  back its own targets and no one else's.
+- **A line still out is passed over.** A pass first claims the line of every consumer whose line is
+  free, then reads the targets and judges them, so what it judges was read after every ping those lines
+  had out was recorded. A consumer whose line an earlier pass still holds is left to that pass: its
+  targets are judged again by the first pass that finds its line free.
+- **One target at a time, in rank order.** On each line the pass walks the consumer's due targets by
+  the rank each registration declares, lowest first, then by target name; the order is stable from
+  pass to pass.
+- **Checked again before each ping.** Just before it posts a ping, the line reads the round, the
   target's subject switch and its pause again, so a switch thrown during a long pass holds from the
-  next ping on. A round found stopped ends the pass there. A target found off, paused or retired is
+  next ping on. A round found stopped ends the line there. A target found off, paused or retired is
   passed over, and no other target of its group takes its place in that pass.
-- **Bounded.** A ping is given the target's ping bound plus the policy's slack. A hook that has not
-  answered by then is recorded failed, and the pass goes on.
-- **Recorded.** Each pass ends with a `pass.created` event, and each attempt with a `target.changed`
-  event for its target.
+- **No clock on a ping.** A ping waits for the hook's answer however long the consumer takes. It ends
+  only in an answer, a connection refused, a request that breaks off, or a hook host that has gone,
+  which the connection's keep-alive probes tell. A hook that never answers holds its consumer's line,
+  and that line alone, until it does.
+- **Recorded.** Each attempt ends with a `target.changed` event for its target, and each pass, once
+  every line it claimed has come back, with a `pass.created` event.
 
 ## When a target is due
 
@@ -77,7 +85,7 @@ targets have none; the service always has one, since a registration declares `tt
 
 - **The last attempt** — its time, outcome, code and reason — is recorded for every ping, whatever it
   answered, and goes into the attempt log (`docs/store.md`). An attempt's time is the moment its
-  answer arrived or the warmer gave up on the hook.
+  answer arrived, or the moment the hook could not be reached or its request broke off.
 - **The last failed attempt's time** is kept apart from the last attempt, so a skipped or busy answer
   after a failure does not lose the failure's touch.
 - **Only a warmed answer restarts the clock.** Its arrival becomes the target's last warmed time, and
@@ -124,13 +132,12 @@ above it refuses the file, naming what is wrong, so a misspelling never reads as
 | `tick_seconds` | 60 | the round's interval while none is set, above 0 |
 | `warm_by_default` | false | whether a target warms when neither its registration nor its subject's switch says |
 | `idle_percent` | 66 | a registration's idle stretch where it states none: this share of its lifetime less its margin, at least one millisecond, 1 to 100 |
-| `ping_bound_seconds` | 120 | a registration's ping bound where it states none, above 0 |
-| `ping_slack_seconds` | 15 | added to a target's ping bound before the warmer gives up on the hook, for the hook's own transport and answer |
 | `reason_units` | 400 | the UTF-16 units a failed attempt's reason is cut to, above 0 |
 | `log_days` | 14 | how many days an attempt stays in the attempt log, above 0 |
 | `event_days` | 2 | how many days an event stays in the event window, above 0 |
 
 A target's clocks are its registration's; the policy fills in only what a registration leaves out.
+No policy value bounds how long a ping, a line or a pass may take.
 
 ## What the warmer leaves to the consumer
 

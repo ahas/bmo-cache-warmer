@@ -1,5 +1,5 @@
 # The warmer's own fixed numbers (docs/warming.md, "The policy"). A target's clocks are its registration's;
-# this file fills in only what a registration leaves out.
+# this file fills in only what a registration leaves out. Nothing here bounds how long a ping may take.
 
 # How long after the service starts the first pass waits: a starting host has real work to do first,
 # and warming is upkeep. The wait and a target's idle stretch still land inside the caches it keeps.
@@ -15,13 +15,6 @@ warm_by_default = false
 # A registration's idle stretch where it states none, as this share of its lifetime less its margin: late
 # enough that a busy prefix is not pinged for nothing, early enough that a ping lands before it drops.
 idle_percent = 66
-
-# A registration's ping bound where it states none: how long its consumer may take to answer one ping.
-ping_bound_seconds = 120
-
-# Added to a target's ping bound before the warmer gives up on the hook. The bound is how long the
-# consumer's ping may take; this covers the hook's own transport and answer around it.
-ping_slack_seconds = 15
 
 # How many UTF-16 units of a failed attempt's reason are kept, the way a script counts a string.
 reason_units = 400

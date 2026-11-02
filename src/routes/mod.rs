@@ -18,7 +18,7 @@ use axum::{Json, Router};
 use futures_util::Stream;
 use serde::Serialize;
 
-use crate::pass::{PassError, Warmer};
+use crate::pass::Warmer;
 use crate::schedule::Clocks;
 use crate::store::{Paging, Pause, Registration, RoundChange, StoreError, StoredEvent, SubjectChange};
 use crate::wire::{
@@ -194,8 +194,8 @@ fn registration(warmer: &Warmer, target: &str, body: TargetBody) -> Result<Regis
     return Err(Refusal::invalid_clock("The ttlMs and marginMs must be 0 or more."));
   }
   let idle_ms = body.idle_ms.unwrap_or_else(|| warmer.policy().idle_ms(body.ttl_ms, margin_ms));
-  let ping_bound_ms = body.ping_bound_ms.unwrap_or_else(|| warmer.policy().ping_bound_ms());
-  if idle_ms <= 0 || ping_bound_ms <= 0 {
+  let ping_bound_ms = body.ping_bound_ms;
+  if idle_ms <= 0 || ping_bound_ms.is_some_and(|stretch| stretch <= 0) {
     return Err(Refusal::invalid_clock("The idleMs and pingBoundMs must be above 0."));
   }
 
@@ -346,10 +346,7 @@ async fn run_pass(State(served): Shared, Body(body): Body<PassBody>) -> Answer {
   if body.idle_override_ms.is_some_and(|stretch| stretch <= 0) {
     return Err(Refusal::invalid_clock("The idleOverrideMs must be above 0."));
   }
-  let pass = served.warmer.try_pass(body.idle_override_ms).await.map_err(|error| match error {
-    PassError::Running => Refusal::conflict(error.to_string()),
-    PassError::Store(error) => error.into(),
-  })?;
+  let pass = served.warmer.pass(body.idle_override_ms).await?;
 
   Ok(answer(StatusCode::CREATED, &pass))
 }

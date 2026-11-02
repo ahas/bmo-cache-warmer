@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "bmo-cache-warmer"
-version = "0.1.0-rev.5"
+version = "0.1.0-rev.6"
 dependencies = [
  "axum",
  "bmo-cache-warmer-schedule",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "bmo-cache-warmer-schedule"
-version = "0.1.0-rev.5"
+version = "0.1.0-rev.6"
 
 [[package]]
 name = "bumpalo"

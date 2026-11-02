@@ -1,12 +1,15 @@
 //! The warmer (docs/warming.md, "The pass" and "What an answer leaves behind"): judge which targets are
-//! due, post each one's ping to its consumer's hook in turn, bounded, and record what came back; and the
-//! events every change publishes (docs/api.md, "Events").
+//! due, post each one's ping to its consumer's hook on that consumer's one line, waiting for each answer
+//! however long it takes, and record what came back; and the events every change publishes (docs/api.md,
+//! "Events").
 
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::future::join_all;
 use serde::Serialize;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::clock::Clock;
@@ -23,18 +26,21 @@ pub struct Warmer {
   policy: Policy,
   clock: Arc<dyn Clock>,
   client: reqwest::Client,
-  running: Mutex<()>,
+  lines: Mutex<HashSet<String>>,
   beat: Beat,
   published: watch::Sender<i64>,
 }
 
-/// Why a pass did not run or did not finish.
-#[derive(Debug, thiserror::Error)]
-pub enum PassError {
-  #[error("A pass is already running.")]
-  Running,
-  #[error(transparent)]
-  Store(#[from] StoreError),
+/// A consumer's line, held by the pass that claimed it until that pass is done with it.
+struct Line<'a> {
+  consumer: String,
+  held: &'a Mutex<HashSet<String>>,
+}
+
+impl Drop for Line<'_> {
+  fn drop(&mut self) {
+    self.held.lock().expect("the lines' set is never left poisoned").remove(&self.consumer);
+  }
 }
 
 /// A hook that failed by the warmer's own judging: its code and an English reason.
@@ -117,7 +123,8 @@ impl From<Fault> for Heard {
 impl Warmer {
   /// The warmer over an open store, its round's interval read from it.
   pub async fn open(store: Store, policy: Policy, clock: Arc<dyn Clock>) -> Result<Self, StoreError> {
-    // A ping goes to the hook URL itself: no proxy from the environment, and a redirect is an answer.
+    // A ping goes to the hook URL itself: no proxy from the environment, and a redirect is an answer. No
+    // clock ends a ping; the client's own keep-alive probes tell a hook host that has gone.
     let client = reqwest::Client::builder()
       .no_proxy()
       .redirect(reqwest::redirect::Policy::none())
@@ -132,7 +139,7 @@ impl Warmer {
       policy,
       clock,
       client,
-      running: Mutex::new(()),
+      lines: Mutex::new(HashSet::new()),
       beat,
       published,
     })
@@ -205,23 +212,9 @@ impl Warmer {
     self.beat.set_interval(duration(interval_ms.unwrap_or_else(|| self.policy.tick_ms())));
   }
 
-  /// Runs a pass now, or refuses while one runs.
-  pub async fn try_pass(&self, idle_override_ms: Option<i64>) -> Result<wire::Pass, PassError> {
-    let _running = self.running.try_lock().map_err(|_| PassError::Running)?;
-
-    Ok(self.run(idle_override_ms).await?)
-  }
-
-  /// Runs a pass once the one running, if any, has ended.
+  /// Runs a pass now, beside any other running, over the consumers whose line is free: the pass, its event,
+  /// then the log and the window pruned to their days, whether or not the pass found the round stopped.
   pub async fn pass(&self, idle_override_ms: Option<i64>) -> Result<wire::Pass, StoreError> {
-    let _running = self.running.lock().await;
-
-    self.run(idle_override_ms).await
-  }
-
-  /// A pass, its event, then the log and the window pruned to their days, whether or not the pass found
-  /// the round stopped.
-  async fn run(&self, idle_override_ms: Option<i64>) -> Result<wire::Pass, StoreError> {
     let (stopped, attempts) = self.ping_due(idle_override_ms).await?;
     let pass = wire::Pass {
       at: self.clock.now(),
@@ -237,16 +230,34 @@ impl Warmer {
     Ok(pass)
   }
 
-  /// Pings every due target in the plan's order: whether the round was found stopped, and each ping.
+  /// Claims the line of each consumer named whose line no pass holds.
+  fn claim(&self, consumers: BTreeSet<String>) -> Vec<Line<'_>> {
+    let mut held = self.lines.lock().expect("the lines' set is never left poisoned");
+
+    consumers
+      .into_iter()
+      .filter(|consumer| held.insert(consumer.clone()))
+      .map(|consumer| Line {
+        consumer,
+        held: &self.lines,
+      })
+      .collect()
+  }
+
+  /// Pings every due target of the consumers whose line it claims, each consumer's on its own line in the
+  /// plan's order and the lines side by side: whether the round was found stopped, and each ping.
   async fn ping_due(
     &self,
     idle_override_ms: Option<i64>,
   ) -> Result<(bool, Vec<wire::PassAttempt>), StoreError> {
-    let mut attempts = Vec::new();
     if self.store.round_stopped().await? {
-      return Ok((true, attempts));
+      return Ok((true, Vec::new()));
     }
 
+    // The lines are claimed before the targets are read, so each claimed consumer is judged from a record
+    // its last line out has already written.
+    let named = self.store.all_targets().await?.into_iter().map(|target| target.consumer).collect();
+    let claimed = self.claim(named);
     let default = self.policy.warm_by_default;
     let now = self.clock.now();
     let targets = self.store.all_targets().await?;
@@ -257,8 +268,49 @@ impl Warmer {
       stopped: false,
     };
 
+    let mut lines: Vec<(Line<'_>, Vec<usize>)> = Vec::new();
+    let mut free = claimed;
     for index in schedule::plan(&candidates, &pass) {
-      let planned = &targets[index];
+      let consumer = &targets[index].consumer;
+      if let Some((_, planned)) = lines.iter_mut().find(|(line, _)| &line.consumer == consumer) {
+        planned.push(index);
+      } else if let Some(at) = free.iter().position(|line| &line.consumer == consumer) {
+        lines.push((free.swap_remove(at), vec![index]));
+      }
+    }
+    // A claimed line with nothing due is given back before any ping goes.
+    drop(free);
+
+    let ran = join_all(lines.into_iter().map(|(line, planned)| {
+      let due: Vec<_> = planned
+        .into_iter()
+        .map(|index| (&targets[index], candidates[index].due_at(pass.now).unwrap_or(pass.now)))
+        .collect();
+      self.walk(line, due)
+    }))
+    .await;
+
+    let mut stopped = false;
+    let mut attempts = Vec::new();
+    for walked in ran {
+      let (found_stopped, pinged) = walked?;
+      stopped |= found_stopped;
+      attempts.extend(pinged);
+    }
+    Ok((stopped, attempts))
+  }
+
+  /// Walks one consumer's due targets on its line, one ping at a time, each waiting for its answer:
+  /// whether it found the round stopped, and each ping. The line is given back as the walk ends.
+  async fn walk(
+    &self,
+    _line: Line<'_>,
+    due: Vec<(&Target, i64)>,
+  ) -> Result<(bool, Vec<wire::PassAttempt>), StoreError> {
+    let default = self.policy.warm_by_default;
+    let mut attempts = Vec::new();
+
+    for (planned, due_at) in due {
       if self.store.round_stopped().await? {
         return Ok((true, attempts));
       }
@@ -273,7 +325,6 @@ impl Warmer {
         continue;
       };
 
-      let due_at = candidates[index].due_at(pass.now).unwrap_or(pass.now);
       let attempt = self.ping(&hook_url, &target, due_at).await;
       if self.store.record_attempt(&target.consumer, &target.name, &attempt).await? {
         self.target_changed(&target.consumer, &target.name).await?;
@@ -290,10 +341,8 @@ impl Warmer {
     Ok((false, attempts))
   }
 
-  /// Posts one ping and judges what came back, within the target's bound and the policy's slack.
+  /// Posts one ping and judges what came back, waiting for the answer however long the hook takes.
   async fn ping(&self, hook_url: &str, target: &Target, due_at: i64) -> Attempt {
-    let bound =
-      Duration::from_millis(u64::try_from(target.ping_bound_ms).unwrap_or(0)) + self.policy.ping_slack();
     let ping = wire::TargetPing {
       consumer_name: target.consumer.clone(),
       target_name: target.name.clone(),
@@ -303,13 +352,9 @@ impl Warmer {
       bound_ms: target.ping_bound_ms,
     };
 
-    let heard = match tokio::time::timeout(bound, self.call(hook_url, &ping)).await {
-      Ok(Ok(heard)) => heard,
-      Ok(Err(fault)) => fault.into(),
-      Err(_) => {
-        Fault::new("hook-timeout", format!("The hook did not answer within {} ms.", bound.as_millis()))
-          .into()
-      }
+    let heard = match self.call(hook_url, &ping).await {
+      Ok(heard) => heard,
+      Err(fault) => fault.into(),
     };
 
     Attempt {

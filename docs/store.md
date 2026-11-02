@@ -23,9 +23,10 @@ with them is `docs/warming.md`'s.
 - **Subjects:** each subject's consumer, name, switch (on, off or unset) and its pause, as the time it
   was set and the time it ends, while that stands. A subject is made the first time a target names it
   or a switch or pause is set on it, and stays when its last target is retired, so its switch is kept.
-- **Targets:** what each registration declares — kind, label, subject, rank, clocks, group, default,
-  failure touches, idle override — beside its record: last use, last warmed answer, last failed
-  attempt, and the last attempt's time, outcome, code and reason. Restating a registration changes
+- **Targets:** what each registration declares — kind, label, subject, rank, clocks, the ping stretch
+  it keeps for itself where it declares one, group, default, failure touches, idle override — beside
+  its record: last use, last warmed answer, last failed attempt, and the last attempt's time, outcome,
+  code and reason. Restating a registration changes
   only what it declares; the record stays, and a stated last use is taken only where it is later.
   Retiring a target removes its record and its attempts.
 - **Attempts:** the attempt log, one row per ping — consumer, target, time, outcome, code, reason.

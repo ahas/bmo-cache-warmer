@@ -20,8 +20,6 @@ pub struct Policy {
   pub tick_seconds: u64,
   pub warm_by_default: bool,
   pub idle_percent: u8,
-  pub ping_bound_seconds: u64,
-  pub ping_slack_seconds: u64,
   pub reason_units: usize,
   pub log_days: u64,
   pub event_days: u64,
@@ -51,7 +49,6 @@ impl Policy {
     let above_zero = [
       ("tick_seconds", policy.tick_seconds),
       ("idle_percent", u64::from(policy.idle_percent)),
-      ("ping_bound_seconds", policy.ping_bound_seconds),
       ("reason_units", policy.reason_units as u64),
       ("log_days", policy.log_days),
       ("event_days", policy.event_days),
@@ -76,15 +73,6 @@ impl Policy {
   /// The round's interval while none is set, in milliseconds.
   pub fn tick_ms(&self) -> i64 {
     millis(self.tick())
-  }
-
-  pub fn ping_slack(&self) -> Duration {
-    Duration::from_secs(self.ping_slack_seconds)
-  }
-
-  /// A registration's ping bound where it states none, in milliseconds.
-  pub fn ping_bound_ms(&self) -> i64 {
-    millis(Duration::from_secs(self.ping_bound_seconds))
   }
 
   /// A registration's idle stretch where it states none: the policy's share of its usable lifetime, at

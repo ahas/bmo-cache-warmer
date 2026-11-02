@@ -1,5 +1,6 @@
 //! The store (docs/store.md): what each write keeps and refuses, its pages and its event window, and how
-//! its shape moves, rows carried across the migration that gives every member an id.
+//! its shape moves, rows carried across the migration that gives every member an id and the one that lets a
+//! target declare no ping stretch.
 
 mod fixtures;
 
@@ -510,7 +511,7 @@ async fn the_id_migration_carries_every_row_it_can_and_goes_back() {
   .await
   .expect("old-shape rows");
 
-  Migrator::up(&db, None).await.expect("the shape comes up");
+  Migrator::up(&db, Some(1)).await.expect("the shape comes up");
   assert_eq!(
     value::<String>(&db, r#"SELECT "url" FROM "consumers" WHERE "name" = 'alpha'"#).await,
     "http://127.0.0.1:1/ping"
@@ -538,5 +539,45 @@ async fn the_id_migration_carries_every_row_it_can_and_goes_back() {
     "chat_touch/hook_timeout"
   );
   assert_eq!(value::<i64>(&db, r#"SELECT "paused_at" FROM "subjects""#).await, 5);
+  assert_eq!(value::<i64>(&db, "SELECT COUNT(*) FROM pragma_foreign_key_check").await, 0);
+}
+
+#[tokio::test]
+async fn the_stretch_migration_carries_each_stretch_takes_none_and_goes_back() {
+  let dir = tempfile::tempdir().expect("a scratch directory");
+  let db = bare(&dir.path().join("warmer.sqlite")).await;
+  Migrator::up(&db, Some(2)).await.expect("the shape before the stretch");
+  db.execute_unprepared(
+    r#"
+    INSERT INTO "consumers" ("name", "url", "created_at") VALUES ('alpha', 'http://127.0.0.1:1/ping', 1);
+    INSERT INTO "subjects" ("consumer", "name") VALUES ('alpha', 'session');
+    INSERT INTO "targets" ("consumer", "name", "subject", "rank", "idle_ms", "lifetime_ms", "margin_ms",
+      "ping_bound_ms", "failure_touches", "honours_idle_override")
+    VALUES ('alpha', 'kept', 'session', 0, 2400000, 3600000, 0, 1800000, 0, 1);
+    "#,
+  )
+  .await
+  .expect("rows of the shape before");
+
+  Migrator::up(&db, None).await.expect("the shape comes up");
+  assert_eq!(value::<i64>(&db, r#"SELECT "ping_bound_ms" FROM "targets""#).await, 1_800_000);
+  db.execute_unprepared(
+    r#"INSERT INTO "targets" ("consumer", "name", "subject", "rank", "idle_ms", "lifetime_ms", "margin_ms",
+         "failure_touches", "honours_idle_override")
+       VALUES ('alpha', 'bare', 'session', 0, 2400000, 3600000, 0, 0, 1)"#,
+  )
+  .await
+  .expect("a target with no stretch");
+  assert!(
+    db.execute_unprepared(r#"UPDATE "targets" SET "ping_bound_ms" = 0 WHERE "name" = 'kept'"#)
+      .await
+      .is_err()
+  );
+
+  Migrator::down(&db, Some(1)).await.expect("one step back");
+  assert_eq!(
+    value::<String>(&db, r#"SELECT group_concat("name" || ':' || "ping_bound_ms") FROM "targets""#).await,
+    "kept:1800000,bare:120000"
+  );
   assert_eq!(value::<i64>(&db, "SELECT COUNT(*) FROM pragma_foreign_key_check").await, 0);
 }
