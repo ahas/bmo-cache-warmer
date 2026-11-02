@@ -6,3 +6,9 @@ description = "The keepalive schedule's rule: when a kept prompt-cache prefix is
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# One test target, the harness at tests/main.rs (bmo-chat's docs/conventions.md, 「Rust builds」).
+autotests = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

@@ -1,7 +1,7 @@
 //! The pass (docs/warming.md, "The pass" and "What an answer leaves behind"), run against a fake consumer
 //! on loopback whose hook answers as each test scripts it, on a clock the test moves.
 
-mod fixtures;
+use crate::fixtures;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

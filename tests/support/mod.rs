@@ -1,9 +1,6 @@
 //! What the tests share: the root, the workspace's members and the walk over the files the repository
 //! checks read.
 
-// Each test file is its own crate and uses only part of this module.
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -1,9 +1,6 @@
 //! What the store's, the pass's and the routes' tests share: a store in a scratch directory, a clock the
 //! test moves, and a registration to vary.
 
-// Each test file is its own crate and uses only part of this module.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -42,10 +39,6 @@ pub struct TestClock(AtomicI64);
 impl TestClock {
   pub fn at(now: i64) -> Self {
     Self(AtomicI64::new(now))
-  }
-
-  pub fn set(&self, now: i64) {
-    self.0.store(now, Ordering::SeqCst);
   }
 
   pub fn advance(&self, by: i64) {

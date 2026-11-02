@@ -2,7 +2,7 @@
 //! telephone number, token or private network address. The check names nobody: it matches shapes, and
 //! reports the file, the line and the kind, never the value it found.
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::path::Path;

@@ -2,7 +2,7 @@
 //! client against the service on a loopback port, and the binary spoken to over standard input and output as
 //! a harness speaks to it.
 
-mod fixtures;
+use crate::fixtures;
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};

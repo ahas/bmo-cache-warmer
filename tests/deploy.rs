@@ -4,8 +4,8 @@
 //! the deployment makes once and asks the binary's health with. The backup a deployment takes copies that
 //! store with that binary, and leaves the live store out of the raw pack.
 
-mod fixtures;
-mod support;
+use crate::fixtures;
+use crate::support;
 
 use std::fs;
 use std::path::Path;

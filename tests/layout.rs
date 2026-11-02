@@ -1,7 +1,7 @@
 //! The repository's layout: one Cargo workspace at the root whose members are its only packages, no other
 //! build tool's manifest, no directory named after its parent, and one version.
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::path::Path;

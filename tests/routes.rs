@@ -2,7 +2,7 @@
 //! speaks to them: the token, the wire shape of each member, what each route refuses, and the events each
 //! change publishes. The pass and the store judge what is warmed; their own tests hold that.
 
-mod fixtures;
+use crate::fixtures;
 
 use std::sync::Arc;
 use std::time::Duration;

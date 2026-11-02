@@ -2,7 +2,7 @@
 //! its shape moves, rows carried across the migration that gives every member an id and the one that lets a
 //! target declare no ping stretch.
 
-mod fixtures;
+use crate::fixtures;
 
 use bmo_cache_warmer::migration::{Migrator, MigratorTrait};
 use bmo_cache_warmer::store::{

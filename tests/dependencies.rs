@@ -2,7 +2,7 @@
 //! no other unit and serves no screen, so not even the base libraries are allowed. The schedule crate has
 //! no dependency at all, so a consumer that takes it builds the rule alone.
 
-mod support;
+use crate::support;
 
 use std::path::{Component, Path, PathBuf};
 

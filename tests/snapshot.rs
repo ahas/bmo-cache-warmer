@@ -1,7 +1,7 @@
 //! The snapshot (docs/store.md, "The snapshot"): a copy of a store in use holds to its manifest and
 //! reopens with the same rows, and a copy or a manifest that changed, or is missing, is refused.
 
-mod fixtures;
+use crate::fixtures;
 
 use std::fs;
 use std::path::Path;
