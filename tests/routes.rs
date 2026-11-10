@@ -72,7 +72,7 @@ impl Served {
 
   async fn consumer(&self, name: &str) {
     let (status, _) = self
-      .put(&format!("/consumers/{name}"), json!({ "url": "http://127.0.0.1:1/ping" }))
+      .put(&format!("/consumers/{name}"), json!({ "url": "http://[::1]:1/ping" }))
       .await;
     assert!(status.is_success());
   }
@@ -150,16 +150,16 @@ async fn health_answers_ready_and_the_version() {
 #[tokio::test]
 async fn a_consumer_is_registered_with_an_http_url_and_listed_by_page() {
   let served = served().await;
-  let (status, first) = served.put("/consumers/alpha", json!({ "url": "http://127.0.0.1:1/ping" })).await;
+  let (status, first) = served.put("/consumers/alpha", json!({ "url": "http://[::1]:1/ping" })).await;
   assert_eq!(status, StatusCode::CREATED);
   assert_eq!(first["name"], "alpha");
   assert_eq!(first["createdAt"], NOW);
   served.clock.advance(MINUTE);
-  let (status, again) = served.put("/consumers/alpha", json!({ "url": "http://127.0.0.1:2/ping" })).await;
+  let (status, again) = served.put("/consumers/alpha", json!({ "url": "http://[::1]:2/ping" })).await;
   assert_eq!(status, StatusCode::OK);
   assert_eq!(
     again,
-    json!({ "id": first["id"], "name": "alpha", "url": "http://127.0.0.1:2/ping", "createdAt": NOW })
+    json!({ "id": first["id"], "name": "alpha", "url": "http://[::1]:2/ping", "createdAt": NOW })
   );
 
   for url in ["https://127.0.0.1/ping", "/ping", "not a url"] {

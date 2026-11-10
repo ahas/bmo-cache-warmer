@@ -16,7 +16,7 @@ use sqlx::{Connection, SqliteConnection};
 /// and a stopped round with its interval, left open as the service holds it.
 async fn store_in_use() -> (tempfile::TempDir, Store) {
   let (dir, store) = store().await;
-  store.put_consumer("alpha", "http://127.0.0.1:1/ping", NOW).await.unwrap();
+  store.put_consumer("alpha", "http://[::1]:1/ping", NOW).await.unwrap();
   store.put_group("alpha", "pool", 2).await.unwrap();
   store.put_target("alpha", "line", &line("session")).await.unwrap();
   store.put_target("alpha", "seat", &place("holder", "pool")).await.unwrap();
@@ -122,7 +122,7 @@ async fn verify_refuses_a_changed_copy() {
   let (_dir, snapshot, _store) = taken().await;
   let options = SqliteConnectOptions::new().filename(snapshot.path().join(COPY));
   let mut copy = SqliteConnection::connect_with(&options).await.unwrap();
-  sqlx::query(r#"UPDATE "consumers" SET "url" = 'http://127.0.0.1:2/ping'"#)
+  sqlx::query(r#"UPDATE "consumers" SET "url" = 'http://[::1]:2/ping'"#)
     .execute(&mut copy)
     .await
     .unwrap();

@@ -248,7 +248,7 @@ async fn the_declared_backup_runs_before_the_first_release_and_after_it() {
   // A store with no release binary to copy it fails the backup.
   fs::create_dir_all(&data_root).unwrap();
   let store = Store::open(&data_root.join("warmer.sqlite")).await.unwrap();
-  store.put_consumer("tester", "http://127.0.0.1:1/ping", 0).await.unwrap();
+  store.put_consumer("tester", "http://[::1]:1/ping", 0).await.unwrap();
   let ran = backup_command("snapshot", home.path(), &empty);
   assert!(!ran.status.success());
   assert_eq!(said(&ran), "The store stands, but no release binary stands to copy it.\n");

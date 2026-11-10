@@ -29,7 +29,7 @@ const NAMES: [&str; 6] = [
 /// Calls one tool by name through a client of a served warmer holding one consumer.
 async fn called(calls: Vec<(&'static str, Value)>) -> Vec<Result<Value, ToolFailure>> {
   let (_dir, warmer, _clock) = warmer().await;
-  warmer.store().put_consumer("alpha", "http://127.0.0.1:1/ping", NOW).await.unwrap();
+  warmer.store().put_consumer("alpha", "http://[::1]:1/ping", NOW).await.unwrap();
   let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
   let address = format!("http://{}", listener.local_addr().unwrap());
   let app = router(warmer, TOKEN);
@@ -145,7 +145,7 @@ fn ended(child: &mut Child) -> Option<i32> {
 
 #[test]
 fn the_server_lists_exactly_the_six_tools_to_a_harness() {
-  let mut child = started(&["--token", "t", "--address", "http://127.0.0.1:1"]);
+  let mut child = started(&["--token", "t", "--address", "http://[::1]:1"]);
   let mut input = child.stdin.take().unwrap();
   let mut output = BufReader::new(child.stdout.take().unwrap());
   let say = |input: &mut std::process::ChildStdin, message: Value| {

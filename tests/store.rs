@@ -12,7 +12,7 @@ use fixtures::{IDLE, MINUTE, NOW, line, place, store};
 use sea_orm::{ConnectionTrait, DatabaseConnection, SqlxSqliteConnector};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-const HOOK: &str = "http://127.0.0.1:1/ping";
+const HOOK: &str = "http://[::1]:1/ping";
 
 fn attempt(at: i64, outcome: Outcome) -> Attempt {
   Attempt {
@@ -74,13 +74,13 @@ async fn a_consumer_is_new_once_keeps_its_id_and_first_time_and_its_hook_moves()
   let (first, new) = store.put_consumer("alpha", HOOK, NOW).await.expect("a consumer");
   assert!(new);
   let (again, new) = store
-    .put_consumer("alpha", "http://127.0.0.1:2/ping", NOW + 1)
+    .put_consumer("alpha", "http://[::1]:2/ping", NOW + 1)
     .await
     .expect("a consumer");
   assert!(!new);
   assert_eq!(
     (again.id, again.created_at, again.url.as_str()),
-    (first.id, NOW, "http://127.0.0.1:2/ping")
+    (first.id, NOW, "http://[::1]:2/ping")
   );
   assert_eq!(store.hook_url("nobody").await.expect("no hook"), None);
 }
@@ -492,7 +492,7 @@ async fn the_id_migration_carries_every_row_it_can_and_goes_back() {
   Migrator::up(&db, Some(1)).await.expect("the first shape");
   db.execute_unprepared(
     r#"
-    INSERT INTO "consumers" ("name", "hook_url") VALUES ('alpha', 'http://127.0.0.1:1/ping');
+    INSERT INTO "consumers" ("name", "hook_url") VALUES ('alpha', 'http://[::1]:1/ping');
     INSERT INTO "groups" ("consumer", "name", "limit") VALUES ('alpha', 'large', 2);
     INSERT INTO "subjects" ("consumer", "name", "switch", "paused_at") VALUES ('alpha', 'session', 1, 5);
     INSERT INTO "targets" ("consumer", "name", "kind", "label", "subject", "rank", "idle_ms", "lifetime_ms",
@@ -514,7 +514,7 @@ async fn the_id_migration_carries_every_row_it_can_and_goes_back() {
   Migrator::up(&db, Some(1)).await.expect("the shape comes up");
   assert_eq!(
     value::<String>(&db, r#"SELECT "url" FROM "consumers" WHERE "name" = 'alpha'"#).await,
-    "http://127.0.0.1:1/ping"
+    "http://[::1]:1/ping"
   );
   assert!(value::<i64>(&db, r#"SELECT "id" FROM "consumers" WHERE "name" = 'alpha'"#).await > 0);
   assert_eq!(value::<i64>(&db, r#"SELECT "paused_until" FROM "subjects""#).await, i64::MAX);
@@ -532,7 +532,7 @@ async fn the_id_migration_carries_every_row_it_can_and_goes_back() {
   Migrator::down(&db, Some(1)).await.expect("one step back");
   assert_eq!(
     value::<String>(&db, r#"SELECT "hook_url" FROM "consumers""#).await,
-    "http://127.0.0.1:1/ping"
+    "http://[::1]:1/ping"
   );
   assert_eq!(
     value::<String>(&db, r#"SELECT "kind" || '/' || "attempt_code" FROM "targets""#).await,
@@ -549,7 +549,7 @@ async fn the_stretch_migration_carries_each_stretch_takes_none_and_goes_back() {
   Migrator::up(&db, Some(2)).await.expect("the shape before the stretch");
   db.execute_unprepared(
     r#"
-    INSERT INTO "consumers" ("name", "url", "created_at") VALUES ('alpha', 'http://127.0.0.1:1/ping', 1);
+    INSERT INTO "consumers" ("name", "url", "created_at") VALUES ('alpha', 'http://[::1]:1/ping', 1);
     INSERT INTO "subjects" ("consumer", "name") VALUES ('alpha', 'session');
     INSERT INTO "targets" ("consumer", "name", "subject", "rank", "idle_ms", "lifetime_ms", "margin_ms",
       "ping_bound_ms", "failure_touches", "honours_idle_override")
