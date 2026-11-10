@@ -73,15 +73,9 @@ async fn a_consumer_is_new_once_keeps_its_id_and_first_time_and_its_hook_moves()
 
   let (first, new) = store.put_consumer("alpha", HOOK, NOW).await.expect("a consumer");
   assert!(new);
-  let (again, new) = store
-    .put_consumer("alpha", "http://[::1]:2/ping", NOW + 1)
-    .await
-    .expect("a consumer");
+  let (again, new) = store.put_consumer("alpha", "http://[::1]:2/ping", NOW + 1).await.expect("a consumer");
   assert!(!new);
-  assert_eq!(
-    (again.id, again.created_at, again.url.as_str()),
-    (first.id, NOW, "http://[::1]:2/ping")
-  );
+  assert_eq!((again.id, again.created_at, again.url.as_str()), (first.id, NOW, "http://[::1]:2/ping"));
   assert_eq!(store.hook_url("nobody").await.expect("no hook"), None);
 }
 

@@ -71,9 +71,8 @@ impl Served {
   }
 
   async fn consumer(&self, name: &str) {
-    let (status, _) = self
-      .put(&format!("/consumers/{name}"), json!({ "url": "http://[::1]:1/ping" }))
-      .await;
+    let (status, _) =
+      self.put(&format!("/consumers/{name}"), json!({ "url": "http://[::1]:1/ping" })).await;
     assert!(status.is_success());
   }
 
