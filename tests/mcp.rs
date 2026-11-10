@@ -104,7 +104,7 @@ async fn a_refusal_and_arguments_out_of_shape_come_back_as_tool_errors() {
 
 #[tokio::test]
 async fn a_service_nobody_listens_on_is_an_error_with_no_code() {
-  let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+  let closed = std::net::TcpListener::bind("[::1]:0").unwrap();
   let address = format!("http://{}", closed.local_addr().unwrap());
   drop(closed);
   let client = WarmerClient::new(&address, TOKEN).unwrap();

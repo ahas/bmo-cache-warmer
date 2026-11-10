@@ -359,7 +359,7 @@ async fn a_hook_that_answers_wrongly_is_recorded_as_failed_with_the_warmers_code
 #[tokio::test]
 async fn a_hook_nobody_listens_on_is_unreachable() {
   let bench = bench().await;
-  let closed = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
+  let closed = TcpListener::bind("[::1]:0").await.expect("a loopback port");
   let hook_url = format!("http://{}/ping", closed.local_addr().expect("the port's address"));
   drop(closed);
   bench.store.put_consumer("gone", &hook_url, NOW).await.expect("a consumer");
