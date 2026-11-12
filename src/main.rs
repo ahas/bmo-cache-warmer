@@ -16,6 +16,7 @@ use bmo_cache_warmer::service::{self, Ended};
 use bmo_cache_warmer::snapshot::{self, Manifest};
 use bmo_cache_warmer::store::Store;
 use clap::{Args, Parser, Subcommand};
+use futures_util::Stream;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -135,7 +136,7 @@ async fn serve(listen: SocketAddr, store: PathBuf, token_file: &Path) -> Result<
   if !listen.ip().is_loopback() {
     return Err(format!("The listen address {listen} is not on loopback."));
   }
-  let stopped = stopped()?;
+  let signals = signals()?;
   let token = token_in(token_file)?;
   let policy = Policy::builtin().map_err(|error| format!("The built-in policy does not read: {error}."))?;
   let opened = Store::open(&store)
@@ -150,31 +151,37 @@ async fn serve(listen: SocketAddr, store: PathBuf, token_file: &Path) -> Result<
     .map_err(|error| format!("The store's round does not read. {error}"))?;
   let warmer = Arc::new(warmer);
   let drain = warmer.policy().drain();
-  let ended = service::serve(listener, warmer, &token, stopped, drain)
+  let ended = service::serve(listener, warmer, &token, signals, drain)
     .await
     .map_err(|error| format!("The service stopped serving: {error}."))?;
 
   if ended == Ended::Cut {
-    eprintln!("The drain deadline ran out with calls or pings still in flight; they are cut.");
+    eprintln!("The drain was cut with calls or pings still in flight.");
   }
   Ok(())
 }
 
-/// Ends on the first SIGTERM or SIGINT. Both are caught from the moment it is made, so a signal that comes
-/// while the service is still starting is not lost.
-fn stopped() -> Result<impl Future<Output = ()>, String> {
+/// Each SIGTERM or SIGINT as it comes: the first stops the service, the next cuts its drain. Both are caught
+/// from the moment the stream is made, so a signal that comes while the service is still starting is not
+/// lost.
+fn signals() -> Result<impl Stream<Item = ()>, String> {
   let catch = |kind: SignalKind| {
     signal(kind).map_err(|error| format!("The stop's signals cannot be caught: {error}."))
   };
-  let mut terminate = catch(SignalKind::terminate())?;
-  let mut interrupt = catch(SignalKind::interrupt())?;
+  let terminate = catch(SignalKind::terminate())?;
+  let interrupt = catch(SignalKind::interrupt())?;
 
-  Ok(async move {
-    tokio::select! {
-      _ = terminate.recv() => {}
-      _ = interrupt.recv() => {}
-    }
-  })
+  Ok(futures_util::stream::unfold(
+    (terminate, interrupt),
+    |(mut terminate, mut interrupt)| async move {
+      tokio::select! {
+        Some(()) = terminate.recv() => {}
+        Some(()) = interrupt.recv() => {}
+        else => return None,
+      }
+      Some(((), (terminate, interrupt)))
+    },
+  ))
 }
 
 /// Serves the MCP server until its harness closes standard input.

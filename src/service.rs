@@ -1,11 +1,12 @@
 //! The service (docs/api.md, "The service"): the routes served and the ticker run until the stop's signal,
-//! then a drain that takes nothing new and waits for what is in flight, up to a deadline.
+//! then a drain that takes nothing new and waits for what is in flight, up to a deadline or a second
+//! signal.
 
-use std::future::Future;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::{Stream, StreamExt};
 use tokio::net::TcpListener;
 
 use crate::pass::Warmer;
@@ -17,19 +18,21 @@ use crate::ticker::warm;
 pub enum Ended {
   /// Everything in flight finished within the deadline.
   Drained,
-  /// The deadline ran out with calls, pings or passes still in flight, which the caller's exit cuts.
+  /// The deadline ran out, or a second signal came, with calls, pings or passes still in flight, which
+  /// the caller's exit cuts.
   Cut,
 }
 
-/// Serves the routes on `listener` behind `token` and runs the ticker, until `signal` ends or serving
-/// fails; then begins the warmer's stop, so the port closes, the ticker starts no pass and every line
-/// ends before its next ping, and waits up to `drain` for the calls, pings and passes in flight to
-/// finish.
+/// Serves the routes on `listener` behind `token` and runs the ticker, until the first of `signals` comes
+/// or serving fails; then begins the warmer's stop, so the port closes, the ticker starts no pass and every
+/// line ends before its next ping, and waits for the calls, pings and passes in flight to finish, up to
+/// `drain` or the next of `signals`, whichever comes first. Signals that end leave the drain to its
+/// deadline.
 pub async fn serve(
   listener: TcpListener,
   warmer: Arc<Warmer>,
   token: &str,
-  signal: impl Future<Output = ()>,
+  signals: impl Stream<Item = ()>,
   drain: Duration,
 ) -> io::Result<Ended> {
   let served = async {
@@ -42,11 +45,12 @@ pub async fn serve(
   };
   let drained = async { tokio::join!(served, warm(warmer.clone())).0 };
   tokio::pin!(drained);
+  let mut signals = std::pin::pin!(signals);
 
   // The server and the ticker run inside `drained`, so it is polled while the signal is awaited.
   tokio::select! {
     ended = &mut drained => return ended.map(|()| Ended::Drained),
-    () = signal => {}
+    Some(()) = signals.next() => {}
     () = warmer.stop().begun() => {}
   }
   warmer.stop().begin();
@@ -55,8 +59,11 @@ pub async fn serve(
     drain.as_secs_f64()
   );
 
-  match tokio::time::timeout(drain, drained).await {
-    Ok(ended) => ended.map(|()| Ended::Drained),
-    Err(_) => Ok(Ended::Cut),
+  tokio::select! {
+    ended = tokio::time::timeout(drain, drained) => match ended {
+      Ok(ended) => ended.map(|()| Ended::Drained),
+      Err(_) => Ok(Ended::Cut),
+    },
+    Some(()) = signals.next() => Ok(Ended::Cut),
   }
 }

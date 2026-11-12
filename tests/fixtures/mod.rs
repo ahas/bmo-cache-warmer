@@ -1,8 +1,10 @@
-//! What the store's, the pass's and the routes' tests share: a store in a scratch directory, a clock the
-//! test moves, and a registration to vary.
+//! What the store's, the pass's, the routes' and the stop's tests share: a store in a scratch directory, a
+//! clock the test moves, a registration to vary, and a wait for a port to close.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 
 use bmo_cache_warmer::clock::Clock;
 use bmo_cache_warmer::pass::Warmer;
@@ -10,6 +12,7 @@ use bmo_cache_warmer::policy::Policy;
 use bmo_cache_warmer::schedule::Clocks;
 use bmo_cache_warmer::store::{Registration, Store};
 use tempfile::TempDir;
+use tokio::net::TcpStream;
 
 pub const MINUTE: i64 = 60_000;
 pub const IDLE: i64 = 40 * MINUTE;
@@ -84,4 +87,15 @@ pub fn place(subject: &str, group: &str) -> Registration {
   registration.ping_bound_ms = Some(120_000);
   registration.group = Some(group.into());
   registration
+}
+
+/// Waits, a bounded number of times, for a port to refuse a new connection: whether it came to.
+pub async fn refuses(address: SocketAddr) -> bool {
+  for _ in 0..400 {
+    if TcpStream::connect(address).await.is_err() {
+      return true;
+    }
+    tokio::time::sleep(Duration::from_millis(5)).await;
+  }
+  false
 }

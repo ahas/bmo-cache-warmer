@@ -405,10 +405,10 @@ The service stops on SIGTERM or SIGINT by draining, and exits 0 once the drain e
   for and recorded, and each running pass then records its end. The event stream ends at once
   (「Events」).
 - **Within the policy's drain deadline** (`drain_seconds`, `docs/warming.md`, 「The policy」), counted
-  from the signal. What has not finished by then is cut as the process exits: a caller's call breaks
-  off, and a ping still out is never recorded, so its target is judged again by the first pass after
-  the service is back. The service says on standard error when the stop begins and, where the deadline
-  cut anything, that it did.
+  from the signal, or until a second SIGTERM or SIGINT, which cuts the drain at once. What has not
+  finished by then is cut as the process exits: a caller's call breaks off, and a ping still out is
+  never recorded, so its target is judged again by the first pass after the service is back. The
+  service says on standard error when the stop begins and, where the drain was cut, that it was.
 
 ### `mcp` and `health`
 
@@ -453,9 +453,9 @@ What a snapshot holds and how it is judged is `docs/store.md`, 「The snapshot�
   stands either. Putting a snapshot back is `docs/store.md`, 「Putting a snapshot back」.
 - **A deployment waits on the binary's `health`** answering ready before it watches the service stay
   up. systemd supervises the unit.
-- **A stop waits for the drain.** systemd sends SIGTERM and waits with no clock of its own for the
-  service to end, which the service's drain deadline bounds (「The service」); it never escalates to a
-  kill.
+- **A stop waits for the drain.** systemd sends one SIGTERM and waits with no clock of its own for
+  the service to end, which the service's drain deadline bounds (「The service」); it never escalates
+  to a kill.
 
 The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these. Tests in
 `tests/` hold the three to the same address and token file, and the backup to the unit's binary and

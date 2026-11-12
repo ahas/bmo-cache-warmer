@@ -13,11 +13,11 @@ use axum::routing::post;
 use bmo_cache_warmer::pass::Warmer;
 use bmo_cache_warmer::service::{Ended, serve};
 use bmo_cache_warmer::store::Outcome;
-use fixtures::{NOW, line, warmer};
+use fixtures::{NOW, line, refuses, warmer};
 use reqwest::StatusCode;
 use serde_json::Value;
 use tempfile::TempDir;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
@@ -70,9 +70,9 @@ async fn running(hook_url: &str, drain: Duration) -> Running {
   let served = tokio::spawn({
     let warmer = warmer.clone();
     async move {
-      let signalled = async {
+      let signalled = futures_util::stream::once(async {
         let _ = signalled.await;
-      };
+      });
       serve(listener, warmer, TOKEN, signalled, drain).await
     }
   });
@@ -111,17 +111,6 @@ impl Running {
     let found = self.warmer.store().target("alpha", target).await.expect("the store reads");
     found.expect("the target stands").last_attempt.map(|attempt| attempt.outcome)
   }
-}
-
-/// Waits, a bounded number of times, for the port to refuse a new connection.
-async fn refuses(address: SocketAddr) -> bool {
-  for _ in 0..200 {
-    if TcpStream::connect(address).await.is_err() {
-      return true;
-    }
-    tokio::time::sleep(Duration::from_millis(5)).await;
-  }
-  false
 }
 
 #[tokio::test]

@@ -38,11 +38,11 @@ or the round ends its warming.
   that pass.
 - **No clock on a ping.** A ping waits for the hook's answer however long the consumer takes. It ends
   only in an answer, a connection refused, a request that breaks off, a hook host that has gone,
-  which the connection's keep-alive probes tell, or the service's drain deadline running out. A hook
+  which the connection's keep-alive probes tell, or the service's stop cutting its drain. A hook
   that never answers holds its consumer's line, and that line alone, until it does.
 - **The stop.** Once the service is stopping, the ticker starts no pass, a pass asked for pings
   nothing, and a running pass waits only for the pings already out before it records its end. A ping
-  the drain deadline cuts is not recorded, so its target keeps its record and is judged again by the
+  the stop cuts, at its drain deadline or on a second signal, is not recorded, so its target keeps its record and is judged again by the
   first pass after the service is back (`docs/api.md`, 「The service」).
 - **Recorded.** Each attempt ends with a `target.changed` event for its target, and each pass, once
   every line it claimed has come back, with a `pass.created` event.

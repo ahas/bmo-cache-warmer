@@ -13,6 +13,7 @@ mod openapi;
 mod pass;
 mod personal_data;
 mod policy;
+mod restart;
 mod routes;
 mod service;
 mod snapshot;
