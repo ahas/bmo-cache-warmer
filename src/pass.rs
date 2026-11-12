@@ -15,12 +15,13 @@ use tokio::time::Instant;
 use crate::clock::Clock;
 use crate::policy::Policy;
 use crate::schedule::{self, Pass as Judged};
+use crate::stop::Stop;
 use crate::store::{Attempt, Outcome, Store, StoreError, Target};
 use crate::ticker::Beat;
 use crate::wire;
 use crate::words::is_kind;
 
-/// The store, the policy and the clock one pass at a time runs on, and the round's beat.
+/// The store, the policy and the clock one pass at a time runs on, the round's beat and the service's stop.
 pub struct Warmer {
   store: Store,
   policy: Policy,
@@ -29,6 +30,7 @@ pub struct Warmer {
   lines: Mutex<HashSet<String>>,
   beat: Beat,
   published: watch::Sender<i64>,
+  stop: Stop,
 }
 
 /// A consumer's line, held by the pass that claimed it until that pass is done with it.
@@ -142,6 +144,7 @@ impl Warmer {
       lines: Mutex::new(HashSet::new()),
       beat,
       published,
+      stop: Stop::new(),
     })
   }
 
@@ -159,6 +162,16 @@ impl Warmer {
 
   pub fn beat(&self) -> &Beat {
     &self.beat
+  }
+
+  /// The service's stop, which ends every line before its next ping once begun.
+  pub fn stop(&self) -> &Stop {
+    &self.stop
+  }
+
+  /// Whether a pass or a line ends here: the service is stopping, or the round is found stopped.
+  async fn halted(&self) -> Result<bool, StoreError> {
+    Ok(self.stop.has_begun() || self.store.round_stopped().await?)
   }
 
   /// Keeps an event carrying `data` and tells every reader of the stream.
@@ -245,12 +258,13 @@ impl Warmer {
   }
 
   /// Pings every due target of the consumers whose line it claims, each consumer's on its own line in the
-  /// plan's order and the lines side by side: whether the round was found stopped, and each ping.
+  /// plan's order and the lines side by side: whether the round was found stopped or the service stopping,
+  /// and each ping.
   async fn ping_due(
     &self,
     idle_override_ms: Option<i64>,
   ) -> Result<(bool, Vec<wire::PassAttempt>), StoreError> {
-    if self.store.round_stopped().await? {
+    if self.halted().await? {
       return Ok((true, Vec::new()));
     }
 
@@ -301,7 +315,8 @@ impl Warmer {
   }
 
   /// Walks one consumer's due targets on its line, one ping at a time, each waiting for its answer:
-  /// whether it found the round stopped, and each ping. The line is given back as the walk ends.
+  /// whether it found the round stopped or the service stopping, and each ping. The line is given back as
+  /// the walk ends.
   async fn walk(
     &self,
     _line: Line<'_>,
@@ -311,7 +326,7 @@ impl Warmer {
     let mut attempts = Vec::new();
 
     for (planned, due_at) in due {
-      if self.store.round_stopped().await? {
+      if self.halted().await? {
         return Ok((true, attempts));
       }
       let Some(target) = self.store.target(&planned.consumer, &planned.name).await? else {

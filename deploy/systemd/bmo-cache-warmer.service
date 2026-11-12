@@ -16,8 +16,8 @@ ExecStartPre=/usr/bin/mkdir -p %h/.local/share/bmo-cache-warmer/data
 ExecStart=%h/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer
 Restart=on-failure
 RestartSec=5
-# The service ends at once on SIGTERM, which it does not catch; a stop waits for that end and is never
-# escalated to a kill.
+# The service drains on SIGTERM and ends by its own drain deadline (docs/api.md, "The service"); a stop
+# waits for that end and is never escalated to a kill.
 TimeoutStopSec=infinity
 
 [Install]

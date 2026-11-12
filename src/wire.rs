@@ -457,7 +457,7 @@ pub struct Pass {
   pub at: i64,
   /// How many pings went.
   pub pinged_count: i64,
-  /// Whether it found the round stopped, so what remained was not pinged.
+  /// Whether it found the round stopped or the service stopping, so what remained was not pinged.
   pub stopped: bool,
   /// One per ping, each consumer's in the order they went, the consumers in the order of their first target
   /// in the pass.

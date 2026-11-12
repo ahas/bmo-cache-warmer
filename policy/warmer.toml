@@ -1,5 +1,6 @@
 # The warmer's own fixed numbers (docs/warming.md, "The policy"). A target's clocks are its registration's;
-# this file fills in only what a registration leaves out. Nothing here bounds how long a ping may take.
+# this file fills in only what a registration leaves out. Nothing here bounds how long a ping may take while
+# the service runs; only a stop's drain deadline cuts one.
 
 # How long after the service starts the first pass waits: a starting host has real work to do first,
 # and warming is upkeep. The wait and a target's idle stretch still land inside the caches it keeps.
@@ -24,3 +25,8 @@ log_days = 14
 
 # How many days an event stays in the event window; each pass, as it ends, removes what is older.
 event_days = 2
+
+# How long a stop waits for the calls, pings and passes in flight before it cuts them, counted from the
+# signal: long enough for a call or a ping already out to finish, short enough that a deployment's restart
+# is not held up by a hook that never answers.
+drain_seconds = 15

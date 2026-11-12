@@ -15,7 +15,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt};
 use serde::Serialize;
 
 use crate::pass::Warmer;
@@ -422,13 +422,15 @@ struct Reading {
   published: tokio::sync::watch::Receiver<i64>,
 }
 
-/// The events past `after`, then each one as it is published, for as long as the reader stays.
+/// The events past `after`, then each one as it is published, for as long as the reader stays and the
+/// service does not stop; a reader resumes from the last number it read.
 fn stream(
   warmer: Arc<Warmer>,
   after: i64,
   kinds: Vec<String>,
 ) -> impl Stream<Item = Result<SseEvent, Infallible>> {
   let published = warmer.published();
+  let stopped = warmer.stop().begun();
   let reading = Reading {
     warmer,
     after,
@@ -459,6 +461,7 @@ fn stream(
       }
     }
   })
+  .take_until(stopped)
 }
 
 async fn no_route() -> Refusal {

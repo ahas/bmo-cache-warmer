@@ -14,6 +14,7 @@ mod pass;
 mod personal_data;
 mod policy;
 mod routes;
+mod service;
 mod snapshot;
 mod store;
 mod ticker;

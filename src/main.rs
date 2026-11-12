@@ -1,6 +1,6 @@
 //! The service binary (docs/api.md, "The binary"): serves the warmer's routes and runs its pass on the
-//! round's beat, or, started with a subcommand, serves the harness plugin's MCP server, asks the service's
-//! health, or takes or checks a snapshot of the store.
+//! round's beat until SIGTERM or SIGINT drains it, or, started with a subcommand, serves the harness
+//! plugin's MCP server, asks the service's health, or takes or checks a snapshot of the store.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -12,12 +12,12 @@ use bmo_cache_warmer::clock::SystemClock;
 use bmo_cache_warmer::mcp::WarmerServer;
 use bmo_cache_warmer::pass::Warmer;
 use bmo_cache_warmer::policy::Policy;
-use bmo_cache_warmer::routes::router;
+use bmo_cache_warmer::service::{self, Ended};
 use bmo_cache_warmer::snapshot::{self, Manifest};
 use bmo_cache_warmer::store::Store;
-use bmo_cache_warmer::ticker::warm;
 use clap::{Args, Parser, Subcommand};
 use tokio::net::TcpListener;
+use tokio::signal::unix::{SignalKind, signal};
 
 // The settings the supervisor starts the service with: each an argument, or the environment where the
 // argument is absent. A subcommand stands in for the service, and the service's settings are then not
@@ -129,11 +129,13 @@ fn client(reach: Reach) -> Result<WarmerClient, String> {
     .map_err(|failure| format!("The address does not serve: {failure}."))
 }
 
-/// Opens the store, binds the port, starts the ticker and serves the routes until serving fails.
+/// Opens the store, binds the port, starts the ticker and serves the routes until SIGTERM or SIGINT, then
+/// drains within the policy's deadline.
 async fn serve(listen: SocketAddr, store: PathBuf, token_file: &Path) -> Result<(), String> {
   if !listen.ip().is_loopback() {
     return Err(format!("The listen address {listen} is not on loopback."));
   }
+  let stopped = stopped()?;
   let token = token_in(token_file)?;
   let policy = Policy::builtin().map_err(|error| format!("The built-in policy does not read: {error}."))?;
   let opened = Store::open(&store)
@@ -147,10 +149,32 @@ async fn serve(listen: SocketAddr, store: PathBuf, token_file: &Path) -> Result<
     .await
     .map_err(|error| format!("The store's round does not read. {error}"))?;
   let warmer = Arc::new(warmer);
-  tokio::spawn(warm(warmer.clone()));
-  axum::serve(listener, router(warmer, &token))
+  let drain = warmer.policy().drain();
+  let ended = service::serve(listener, warmer, &token, stopped, drain)
     .await
-    .map_err(|error| format!("The service stopped serving: {error}."))
+    .map_err(|error| format!("The service stopped serving: {error}."))?;
+
+  if ended == Ended::Cut {
+    eprintln!("The drain deadline ran out with calls or pings still in flight; they are cut.");
+  }
+  Ok(())
+}
+
+/// Ends on the first SIGTERM or SIGINT. Both are caught from the moment it is made, so a signal that comes
+/// while the service is still starting is not lost.
+fn stopped() -> Result<impl Future<Output = ()>, String> {
+  let catch = |kind: SignalKind| {
+    signal(kind).map_err(|error| format!("The stop's signals cannot be caught: {error}."))
+  };
+  let mut terminate = catch(SignalKind::terminate())?;
+  let mut interrupt = catch(SignalKind::interrupt())?;
+
+  Ok(async move {
+    tokio::select! {
+      _ = terminate.recv() => {}
+      _ = interrupt.recv() => {}
+    }
+  })
 }
 
 /// Serves the MCP server until its harness closes standard input.

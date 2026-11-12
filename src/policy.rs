@@ -23,6 +23,7 @@ pub struct Policy {
   pub reason_units: usize,
   pub log_days: u64,
   pub event_days: u64,
+  pub drain_seconds: u64,
 }
 
 /// Why a policy text did not read.
@@ -52,6 +53,7 @@ impl Policy {
       ("reason_units", policy.reason_units as u64),
       ("log_days", policy.log_days),
       ("event_days", policy.event_days),
+      ("drain_seconds", policy.drain_seconds),
     ];
     if let Some(&(key, _)) = above_zero.iter().find(|(_, value)| *value == 0) {
       return Err(PolicyError::Zero { key });
@@ -81,6 +83,11 @@ impl Policy {
     let usable = usable(ttl_ms, margin_ms).unwrap_or(0);
 
     (usable.saturating_mul(i64::from(self.idle_percent)) / 100).max(1)
+  }
+
+  /// How long a stop waits for what is in flight before it cuts it.
+  pub fn drain(&self) -> Duration {
+    Duration::from_secs(self.drain_seconds)
   }
 
   /// How long an attempt stays in the attempt log, in milliseconds.

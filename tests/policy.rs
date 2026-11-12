@@ -12,6 +12,7 @@ idle_percent = 66
 reason_units = 400
 log_days = 14
 event_days = 2
+drain_seconds = 15
 ";
 
 #[test]
@@ -23,6 +24,7 @@ fn the_built_in_policy_reads_as_documented() {
   assert_eq!(policy.tick_ms(), 60_000);
   assert_eq!(policy.log_keep_ms(), 14 * 24 * 60 * 60 * 1000);
   assert_eq!(policy.event_keep_ms(), 2 * 24 * 60 * 60 * 1000);
+  assert_eq!(policy.drain(), Duration::from_secs(15));
 }
 
 #[test]
@@ -58,6 +60,7 @@ fn a_zero_where_one_must_be_above_it_is_refused_and_so_is_a_share_over_the_whole
     ("reason_units = 400", "reason_units"),
     ("log_days = 14", "log_days"),
     ("event_days = 2", "event_days"),
+    ("drain_seconds = 15", "drain_seconds"),
   ] {
     let zero = format!("{key} = 0");
     let refused = Policy::read(&SAMPLE.replace(stated, &zero)).expect_err("a zero is refused");

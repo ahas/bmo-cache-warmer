@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "bmo-cache-warmer",
-    "version": "0.1.0-rev.6",
+    "version": "0.1.0-rev.7",
     "description": "A keepalive scheduler for prompt caches: consumers register targets (cached prefixes), record each use, and are asked to ping a target before its cache runs out. Asking is the target-ping webhook each consumer serves at the URL it registered; the service names no consumer and calls no other service. Bodies are JSON with camelCase keys; times are integers of epoch milliseconds. A list is a page in id order, `after` being the id of the last item read. Every failure is answered in the error shape with its status. The harness plugin's tools, each a thin call of one route, are stated under `x-tools`."
   },
   "servers": [
@@ -1624,7 +1624,7 @@
           },
           "stopped": {
             "type": "boolean",
-            "description": "Whether it found the round stopped, so what remained was not pinged."
+            "description": "Whether it found the round stopped or the service stopping, so what remained was not pinged."
           },
           "attempts": {
             "type": "array",

@@ -1,13 +1,14 @@
 //! The ticker (docs/warming.md, "The pass"): the first pass a start delay after the service starts, then
 //! one every interval of the round, each started without waiting for the one before and never run twice to
-//! catch up; and the beat it keeps, which says when the next pass comes and takes a new interval while it
-//! runs.
+//! catch up, until the service's stop; and the beat it keeps, which says when the next pass comes and takes
+//! a new interval while it runs.
 
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::Notify;
+use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until};
 
 use crate::pass::Warmer;
@@ -94,18 +95,24 @@ where
   }
 }
 
-/// Runs the warmer's passes on its round's beat for as long as the service runs. Each pass is started on its
-/// own and not waited for, so a pass whose lines are still out never holds back the next; a pass the store
-/// fails is written to standard error and the next comes as usual.
-pub async fn warm(warmer: Arc<Warmer>) -> ! {
-  run_ticks(warmer.beat(), || {
-    let warmer = warmer.clone();
-    tokio::spawn(async move {
-      if let Err(error) = warmer.pass(None).await {
-        eprintln!("A pass ended early. {error}");
-      }
-    });
-    std::future::ready(())
-  })
-  .await
+/// Runs the warmer's passes on its round's beat until the service's stop begins, then waits for the passes
+/// still running to end. Each pass is started on its own and not waited for, so a pass whose lines are still
+/// out never holds back the next; a pass the store fails is written to standard error and the next comes as
+/// usual.
+pub async fn warm(warmer: Arc<Warmer>) {
+  let mut passes = JoinSet::new();
+  tokio::select! {
+    never = run_ticks(warmer.beat(), || {
+      while passes.try_join_next().is_some() {}
+      let warmer = warmer.clone();
+      passes.spawn(async move {
+        if let Err(error) = warmer.pass(None).await {
+          eprintln!("A pass ended early. {error}");
+        }
+      });
+      std::future::ready(())
+    }) => match never {},
+    () = warmer.stop().begun() => {}
+  }
+  while passes.join_next().await.is_some() {}
 }

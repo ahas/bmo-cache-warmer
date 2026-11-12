@@ -241,15 +241,16 @@ before its next ping. 422 `invalid-clock` for an interval not above 0.
 ### POST `/passes`
 
 Runs one pass now, beside any pass already running, and answers once it ends: once every consumer
-line it claimed has come back, however long their hooks take (`docs/warming.md`, 「The pass」). The
-body may be left out: `idleOverrideMs?`, used instead of `idleMs` for every target that honours it,
-above 0. Answers 201 with the pass:
+line it claimed has come back, however long their hooks take (`docs/warming.md`, 「The pass」). A stop
+ends each line after the ping it has out, within the drain deadline (「The service」). The body may be
+left out: `idleOverrideMs?`, used instead of `idleMs` for every target that honours it, above 0.
+Answers 201 with the pass:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `at` | int | when it ended |
 | `pingedCount` | int | how many pings went |
-| `stopped` | bool | whether it found the round stopped, at its start or before one of its pings, so what remained was not pinged |
+| `stopped` | bool | whether it found the round stopped or the service stopping, at its start or before one of its pings, so what remained was not pinged |
 | `attempts` | object[] | one per ping, each consumer's in the order they went, the consumers in the order of their first target in the pass: `consumerName`, `targetName`, `at`, `outcome`, `code?`, `reason?` |
 
 422 `invalid-clock` for an override not above 0.
@@ -272,6 +273,9 @@ member as a route answers it.
   narrows with `kinds`, a comma-separated list. The stream sends what stands past the cursor, then
   each event as it is published, and a comment line every fifteen seconds. A reader that gives no
   cursor reads from the start of the window.
+- **The stream ends when the service stops,** so an open stream never holds the stop back. The events
+  published while the service drains are kept like any other, and a reader that resumes with its
+  cursor once the service is back reads them.
 - **The window:** events are kept for the policy's `event_days`. A resume from before the window is
   refused 410 `gone`, and the reader reads the collections again.
 - **A page:** a request asking `Accept: application/json` is answered a page of events past `after`,
@@ -392,6 +396,20 @@ bound stops the service before it serves anything, with an English sentence on s
 non-zero exit. Once the store is open and the port bound, the routes are served and the ticker starts
 (`docs/warming.md`, 「The pass」).
 
+The service stops on SIGTERM or SIGINT by draining, and exits 0 once the drain ends:
+
+- **It takes nothing new.** The port closes, so a new connection is refused, and a connection that
+  stands idle is closed. The ticker starts no further pass, and every running pass ends each of its
+  lines before that line's next ping, as it does on a stopped round (`docs/warming.md`, 「The pass」).
+- **What is in flight finishes.** A call already received is answered, a ping already posted is waited
+  for and recorded, and each running pass then records its end. The event stream ends at once
+  (「Events」).
+- **Within the policy's drain deadline** (`drain_seconds`, `docs/warming.md`, 「The policy」), counted
+  from the signal. What has not finished by then is cut as the process exits: a caller's call breaks
+  off, and a ping still out is never recorded, so its target is judged again by the first pass after
+  the service is back. The service says on standard error when the stop begins and, where the deadline
+  cut anything, that it did.
+
 ### `mcp` and `health`
 
 - **`mcp`** serves the harness plugin's MCP server on standard input and output until its input ends.
@@ -435,6 +453,9 @@ What a snapshot holds and how it is judged is `docs/store.md`, 「The snapshot�
   stands either. Putting a snapshot back is `docs/store.md`, 「Putting a snapshot back」.
 - **A deployment waits on the binary's `health`** answering ready before it watches the service stay
   up. systemd supervises the unit.
+- **A stop waits for the drain.** systemd sends SIGTERM and waits with no clock of its own for the
+  service to end, which the service's drain deadline bounds (「The service」); it never escalates to a
+  kill.
 
 The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these. Tests in
 `tests/` hold the three to the same address and token file, and the backup to the unit's binary and

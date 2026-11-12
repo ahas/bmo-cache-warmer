@@ -33,12 +33,17 @@ or the round ends its warming.
   pass to pass.
 - **Checked again before each ping.** Just before it posts a ping, the line reads the round, the
   target's subject switch and its pause again, so a switch thrown during a long pass holds from the
-  next ping on. A round found stopped ends the line there. A target found off, paused or retired is
-  passed over, and no other target of its group takes its place in that pass.
+  next ping on. A round found stopped, or the service found stopping, ends the line there. A target
+  found off, paused or retired is passed over, and no other target of its group takes its place in
+  that pass.
 - **No clock on a ping.** A ping waits for the hook's answer however long the consumer takes. It ends
-  only in an answer, a connection refused, a request that breaks off, or a hook host that has gone,
-  which the connection's keep-alive probes tell. A hook that never answers holds its consumer's line,
-  and that line alone, until it does.
+  only in an answer, a connection refused, a request that breaks off, a hook host that has gone,
+  which the connection's keep-alive probes tell, or the service's drain deadline running out. A hook
+  that never answers holds its consumer's line, and that line alone, until it does.
+- **The stop.** Once the service is stopping, the ticker starts no pass, a pass asked for pings
+  nothing, and a running pass waits only for the pings already out before it records its end. A ping
+  the drain deadline cuts is not recorded, so its target keeps its record and is judged again by the
+  first pass after the service is back (`docs/api.md`, 「The service」).
 - **Recorded.** Each attempt ends with a `target.changed` event for its target, and each pass, once
   every line it claimed has come back, with a `pass.created` event.
 
@@ -135,9 +140,11 @@ above it refuses the file, naming what is wrong, so a misspelling never reads as
 | `reason_units` | 400 | the UTF-16 units a failed attempt's reason is cut to, above 0 |
 | `log_days` | 14 | how many days an attempt stays in the attempt log, above 0 |
 | `event_days` | 2 | how many days an event stays in the event window, above 0 |
+| `drain_seconds` | 15 | how long a stop waits for the calls, pings and passes in flight before it cuts them, above 0 |
 
 A target's clocks are its registration's; the policy fills in only what a registration leaves out.
-No policy value bounds how long a ping, a line or a pass may take.
+No policy value bounds how long a ping, a line or a pass may take while the service runs; only a
+stop's drain deadline cuts them.
 
 ## What the warmer leaves to the consumer
 
