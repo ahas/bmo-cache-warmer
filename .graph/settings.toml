@@ -1,8 +1,0 @@
-repository = "bmo-cache-warmer"
-base = false
-
-[coverage]
-# Every Cargo package's src/ in the workspace, but the two crate roots: one only lists its modules, the other
-# also re-exports the schedule crate's items.
-layout = "bmo-next"
-unindexed = ["src/lib.rs", "schedule/src/lib.rs"]
