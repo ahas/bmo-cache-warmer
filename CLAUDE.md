@@ -52,7 +52,7 @@ These rules hold every change to this repository.
   a machine. Words a person reads in another language are the web console's language packs.
 - No personal data: no user names, home directories, machine names or names of any agent. Names the
   service needs at runtime come from its deployment's environment or arguments, never from the code.
-  The personal-data check in `tests/` holds this over every file, and `docs/PERSONAL-DATA.md` states
+  The testbed's `personal-data` check holds this over every tracked file, and `docs/PERSONAL-DATA.md` states
   the rule and the values it allows.
 
 ## Layout

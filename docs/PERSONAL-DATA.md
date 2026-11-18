@@ -37,16 +37,18 @@ None. The repository names no person, account, host or address of its own.
 
 ## The check
 
-The personal-data check in `tests/` reads every file of the checkout at any depth, the build output
-and git's directory excepted, and fails on:
+The testbed's `personal-data` check, which the declaration enables, reads every file git tracks or
+would track, before anything is built, and fails on:
 
-- a mail address;
-- a home path that names an account, on a Unix-like system or a Windows one;
+- a mail address outside the domains kept for documents;
+- a home path that names an account, on a Unix-like system or a Windows one, outside the neutral
+  role names;
 - a telephone number written in groups, with an optional country or area code;
-- a token: a long value assigned to a token, key, secret or password name, or the shape a vendor
-  gives its keys;
-- a private network address in the RFC 1918 ranges or the link-local range. A loopback address is
-  neither and passes.
+- a token in the shape a vendor gives its keys, a private key's opening line, or a bearer value;
+- a private network address in the RFC 1918 ranges, the shared range or the link-local range. A
+  loopback address is neither and passes.
+
+The forms themselves are the testbed's policy (its `docs/checks.md`, 「The quick checks」).
 
 A failure names the file, the line and the kind, never the value it found. The check keeps no list
 of personal terms: it matches shapes. A rule the check cannot read, such as a name written into a

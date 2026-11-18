@@ -11,7 +11,6 @@ mod layout;
 mod mcp;
 mod openapi;
 mod pass;
-mod personal_data;
 mod policy;
 mod restart;
 mod routes;

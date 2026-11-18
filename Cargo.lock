@@ -262,7 +262,6 @@ dependencies = [
  "bmo-cache-warmer-schedule",
  "clap",
  "futures-util",
- "regex",
  "reqwest",
  "rmcp",
  "schemars",
