@@ -1,0 +1,33 @@
+# What installing the cache warmer on a fresh machine needs, read by the testbed's install verb (bmo-testbed's
+# docs/install.md, "The install declaration"). The service reads no settings file: its address, store and token
+# file stand in its user unit, and a deployment makes its bearer token once in its own data root
+# (docs/api.md, "The deployed service"). It calls no other unit, so it names no upstream.
+
+install = 1
+
+restart = "systemctl --user restart bmo-cache-warmer.service"
+
+[[needs]]
+program = "cargo"
+what = "Rust's Cargo, which a deployment builds the service with: `curl https://sh.rustup.rs -sSf | sh`."
+
+[[needs]]
+program = "cc"
+what = "A C compiler, which builds the SQLite the store is bundled with: the `build-essential` package."
+
+# The address the user unit and the health check both name.
+[[port]]
+name = "cache-warmer.server"
+number = 9023
+
+# The console reaches the warmer's keepalive view with the token its deployment mints, so these lines wait until
+# that token stands.
+[[line]]
+file = "env/web-console.env"
+key = "CACHE_WARMER_ADDRESS"
+value = "http://127.0.0.1:{{port.cache-warmer.server}}"
+
+[[line]]
+file = "env/web-console.env"
+key = "CACHE_WARMER_TOKEN"
+value = "{{file.~/.local/share/bmo-cache-warmer/data/token}}"

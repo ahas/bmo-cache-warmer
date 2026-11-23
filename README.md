@@ -25,7 +25,7 @@ with no dependency.
 | `docs/` | The canonical statements of what the service does, and its OpenAPI document |
 
 At the root stand the workspace's Cargo manifest, which is also the service package's, the version,
-`testbed.toml` with its Korean ledger, `rustfmt.toml`, `CLAUDE.md` and the MIT licence in `LICENSE`.
+`testbed.toml` with its Korean ledger, `install.toml`, `rustfmt.toml`, `CLAUDE.md` and the MIT licence in `LICENSE`.
 
 ## Documents
 

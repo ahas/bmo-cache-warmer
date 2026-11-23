@@ -23,7 +23,7 @@
 | `docs/` | 서비스가 하는 일에 대한 정본 문서와 OpenAPI 문서 |
 
 루트에는 서비스 패키지의 매니페스트이기도 한 워크스페이스 Cargo 매니페스트, 버전, 한국어 대장을 갖춘 `testbed.toml`,
-`rustfmt.toml`, `CLAUDE.md`, 그리고 `LICENSE`의 MIT 라이선스가 있습니다.
+`install.toml`, `rustfmt.toml`, `CLAUDE.md`, 그리고 `LICENSE`의 MIT 라이선스가 있습니다.
 
 ## 문서
 

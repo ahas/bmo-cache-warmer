@@ -24,7 +24,7 @@
 | `docs/` | サービスの動作についての正典となる文書と、OpenAPI ドキュメント |
 
 ルートには、サービスパッケージのマニフェストを兼ねるワークスペースの Cargo マニフェスト、バージョン、韓国語台帳を伴う
-`testbed.toml`、`rustfmt.toml`、`CLAUDE.md`、そして `LICENSE` の MIT ライセンスが置かれています。
+`testbed.toml`、`install.toml`、`rustfmt.toml`、`CLAUDE.md`、そして `LICENSE` の MIT ライセンスが置かれています。
 
 ## ドキュメント
 

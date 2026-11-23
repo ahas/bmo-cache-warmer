@@ -21,7 +21,7 @@
 | `deploy/` | 服务的 systemd 用户单元,部署时从部署树链接 |
 | `docs/` | 关于服务行为的权威文档,以及 OpenAPI 文档 |
 
-根目录下有工作区的 Cargo 清单(同时也是服务包的清单)、版本文件、附带韩语台账的 `testbed.toml`、`rustfmt.toml`、
+根目录下有工作区的 Cargo 清单(同时也是服务包的清单)、版本文件、附带韩语台账的 `testbed.toml`、`install.toml`、`rustfmt.toml`、
 `CLAUDE.md`,以及 `LICENSE` 中的 MIT 许可证。
 
 ## 文档
