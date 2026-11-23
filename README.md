@@ -1,3 +1,5 @@
+**English** | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
+
 # bmo-cache-warmer
 
 A keepalive scheduler for prompt caches. A provider keeps a prompt prefix cached for a while after its
@@ -23,7 +25,7 @@ with no dependency.
 | `docs/` | The canonical statements of what the service does, and its OpenAPI document |
 
 At the root stand the workspace's Cargo manifest, which is also the service package's, the version,
-`testbed.toml` with its Korean ledger, `rustfmt.toml` and `CLAUDE.md`.
+`testbed.toml` with its Korean ledger, `rustfmt.toml`, `CLAUDE.md` and the MIT licence in `LICENSE`.
 
 ## Documents
 
