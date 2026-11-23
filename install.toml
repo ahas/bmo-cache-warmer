@@ -30,4 +30,4 @@ value = "http://127.0.0.1:{{port.cache-warmer.server}}"
 [[line]]
 file = "env/web-console.env"
 key = "CACHE_WARMER_TOKEN"
-value = "{{file.~/.local/share/bmo-cache-warmer/data/token}}"
+value = "{{file.prefix:bmo-cache-warmer/data/token}}"
