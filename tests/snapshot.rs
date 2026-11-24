@@ -82,7 +82,7 @@ async fn a_snapshot_of_a_store_in_use_verifies_and_reopens_with_the_same_rows() 
 
   let written = manifest(snapshot.path());
   let held = written.store.as_ref().expect("the manifest holds the copy");
-  assert_eq!(held.migration, "m20261102_000003_handed_bound");
+  assert_eq!(held.migration, bmo_cache_warmer::migration::BASELINE);
   for (table, rows) in [
     ("consumers", 1),
     ("groups", 1),

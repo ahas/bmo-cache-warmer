@@ -1,10 +1,9 @@
 //! The store (docs/store.md): what each write keeps and refuses, its pages and its event window, and how
-//! its shape moves, rows carried across the migration that gives every member an id and the one that lets a
-//! target declare no ping stretch.
+//! its shape moves: from the 1.0.0 baseline, an install from before it taken as it stands.
 
 use crate::fixtures;
 
-use bmo_cache_warmer::migration::{Migrator, MigratorTrait};
+use bmo_cache_warmer::migration::{BASELINE, BEFORE, Migrator, MigratorTrait, up};
 use bmo_cache_warmer::store::{
   Attempt, Outcome, Paging, Pause, RoundChange, Store, StoreError, SubjectChange, Target,
 };
@@ -479,99 +478,83 @@ async fn value<T: sea_orm::TryGetable>(db: &DatabaseConnection, sql: &str) -> T 
   row.try_get_by_index(0).expect("the value reads")
 }
 
-#[tokio::test]
-async fn the_id_migration_carries_every_row_it_can_and_goes_back() {
-  let dir = tempfile::tempdir().expect("a scratch directory");
-  let db = bare(&dir.path().join("warmer.sqlite")).await;
-  Migrator::up(&db, Some(1)).await.expect("the first shape");
-  db.execute_unprepared(
-    r#"
-    INSERT INTO "consumers" ("name", "hook_url") VALUES ('alpha', 'http://[::1]:1/ping');
-    INSERT INTO "groups" ("consumer", "name", "limit") VALUES ('alpha', 'large', 2);
-    INSERT INTO "subjects" ("consumer", "name", "switch", "paused_at") VALUES ('alpha', 'session', 1, 5);
-    INSERT INTO "targets" ("consumer", "name", "kind", "label", "subject", "rank", "idle_ms", "lifetime_ms",
-      "margin_ms", "ping_bound_ms", "group", "warm_by_default", "failure_touches", "honours_idle_override",
-      "attempt_at", "attempt_outcome", "attempt_code")
-    VALUES
-      ('alpha', 'kept', 'chat_touch', 'a touch', 'session', 90, 2400000, 3600000, 0, 1800000, 'large', 1, 0, 1,
-       7, 'failed', 'hook_timeout'),
-      ('alpha', 'endless', 'worker_session', 'a session', 'session', 80, 2400000, NULL, 0, 90000, NULL, 1, 1, 1,
-       NULL, NULL, NULL);
-    INSERT INTO "attempts" ("consumer", "target", "at", "outcome", "code") VALUES
-      ('alpha', 'kept', 7, 'failed', 'hook_timeout'),
-      ('alpha', 'endless', 8, 'warmed', NULL);
-    "#,
+const BASELINE_SQL: &str = include_str!("../src/migration/baseline.sql");
+
+/// Every object of the file but the record's, as SQLite keeps it, in one line.
+async fn shape(db: &DatabaseConnection) -> String {
+  value::<String>(
+    db,
+    "SELECT group_concat(name || ' ' || COALESCE(sql, ''), ' / ') FROM (SELECT name, sql FROM sqlite_master \
+     WHERE name NOT LIKE 'sqlite_%' AND tbl_name <> 'seaql_migrations' ORDER BY type, name)",
   )
   .await
-  .expect("old-shape rows");
+}
 
-  Migrator::up(&db, Some(1)).await.expect("the shape comes up");
-  assert_eq!(
-    value::<String>(&db, r#"SELECT "url" FROM "consumers" WHERE "name" = 'alpha'"#).await,
-    "http://[::1]:1/ping"
-  );
-  assert!(value::<i64>(&db, r#"SELECT "id" FROM "consumers" WHERE "name" = 'alpha'"#).await > 0);
-  assert_eq!(value::<i64>(&db, r#"SELECT "paused_until" FROM "subjects""#).await, i64::MAX);
-  assert_eq!(value::<i64>(&db, r#"SELECT COUNT(*) FROM "targets""#).await, 1);
-  assert_eq!(value::<String>(&db, r#"SELECT "kind" FROM "targets""#).await, "chat-touch");
-  assert_eq!(value::<String>(&db, r#"SELECT "attempt_code" FROM "targets""#).await, "hook-timeout");
-  assert_eq!(
-    value::<String>(&db, r#"SELECT group_concat("target" || ':' || "code") FROM "attempts""#).await,
-    "kept:hook-timeout"
-  );
-  assert_eq!(value::<Option<i64>>(&db, r#"SELECT "interval_ms" FROM "round""#).await, None);
-  assert_eq!(value::<i64>(&db, r#"SELECT COUNT(*) FROM "events""#).await, 0);
-  assert_eq!(value::<i64>(&db, "SELECT COUNT(*) FROM pragma_foreign_key_check").await, 0);
+async fn recorded(db: &DatabaseConnection) -> String {
+  value::<String>(db, r#"SELECT COALESCE(group_concat("version"), '') FROM "seaql_migrations""#).await
+}
 
-  Migrator::down(&db, Some(1)).await.expect("one step back");
-  assert_eq!(
-    value::<String>(&db, r#"SELECT "hook_url" FROM "consumers""#).await,
-    "http://[::1]:1/ping"
-  );
-  assert_eq!(
-    value::<String>(&db, r#"SELECT "kind" || '/' || "attempt_code" FROM "targets""#).await,
-    "chat_touch/hook_timeout"
-  );
-  assert_eq!(value::<i64>(&db, r#"SELECT "paused_at" FROM "subjects""#).await, 5);
-  assert_eq!(value::<i64>(&db, "SELECT COUNT(*) FROM pragma_foreign_key_check").await, 0);
+/// A fresh file holding the baseline's shape and a consumer, recorded as an install from before 1.0.0 that
+/// ran the first `through` migrations of its last release.
+async fn installed(path: &std::path::Path, through: usize) -> DatabaseConnection {
+  let db = bare(path).await;
+  db.execute_unprepared(BASELINE_SQL).await.expect("the shape");
+  db.execute_unprepared(
+    r#"CREATE TABLE "seaql_migrations" ("version" varchar NOT NULL PRIMARY KEY, "applied_at" bigint NOT NULL)"#,
+  )
+  .await
+  .expect("the record");
+  for version in &BEFORE[..through] {
+    db.execute_unprepared(&format!(
+      r#"INSERT INTO "seaql_migrations" ("version", "applied_at") VALUES ('{version}', 1)"#
+    ))
+    .await
+    .expect("a record");
+  }
+  db.execute_unprepared(
+    r#"INSERT INTO "consumers" ("name", "url", "created_at") VALUES ('alpha', 'http://[::1]:1/ping', 1)"#,
+  )
+  .await
+  .expect("a consumer");
+  db
 }
 
 #[tokio::test]
-async fn the_stretch_migration_carries_each_stretch_takes_none_and_goes_back() {
+async fn a_fresh_file_takes_the_baseline_whole_with_the_rounds_row() {
   let dir = tempfile::tempdir().expect("a scratch directory");
-  let db = bare(&dir.path().join("warmer.sqlite")).await;
-  Migrator::up(&db, Some(2)).await.expect("the shape before the stretch");
-  db.execute_unprepared(
-    r#"
-    INSERT INTO "consumers" ("name", "url", "created_at") VALUES ('alpha', 'http://[::1]:1/ping', 1);
-    INSERT INTO "subjects" ("consumer", "name") VALUES ('alpha', 'session');
-    INSERT INTO "targets" ("consumer", "name", "subject", "rank", "idle_ms", "lifetime_ms", "margin_ms",
-      "ping_bound_ms", "failure_touches", "honours_idle_override")
-    VALUES ('alpha', 'kept', 'session', 0, 2400000, 3600000, 0, 1800000, 0, 1);
-    "#,
-  )
-  .await
-  .expect("rows of the shape before");
+  let migrated = bare(&dir.path().join("migrated.sqlite")).await;
+  up(&migrated).await.expect("the shape comes up");
+  let laid = bare(&dir.path().join("laid.sqlite")).await;
+  laid.execute_unprepared(BASELINE_SQL).await.expect("the shape");
 
-  Migrator::up(&db, None).await.expect("the shape comes up");
-  assert_eq!(value::<i64>(&db, r#"SELECT "ping_bound_ms" FROM "targets""#).await, 1_800_000);
-  db.execute_unprepared(
-    r#"INSERT INTO "targets" ("consumer", "name", "subject", "rank", "idle_ms", "lifetime_ms", "margin_ms",
-         "failure_touches", "honours_idle_override")
-       VALUES ('alpha', 'bare', 'session', 0, 2400000, 3600000, 0, 0, 1)"#,
-  )
-  .await
-  .expect("a target with no stretch");
-  assert!(
-    db.execute_unprepared(r#"UPDATE "targets" SET "ping_bound_ms" = 0 WHERE "name" = 'kept'"#)
-      .await
-      .is_err()
-  );
+  assert_eq!(shape(&migrated).await, shape(&laid).await);
+  assert_eq!(recorded(&migrated).await, BASELINE);
+  assert_eq!(value::<i64>(&migrated, r#"SELECT COUNT(*) FROM "round""#).await, 1);
+}
 
-  Migrator::down(&db, Some(1)).await.expect("one step back");
-  assert_eq!(
-    value::<String>(&db, r#"SELECT group_concat("name" || ':' || "ping_bound_ms") FROM "targets""#).await,
-    "kept:1800000,bare:120000"
-  );
-  assert_eq!(value::<i64>(&db, "SELECT COUNT(*) FROM pragma_foreign_key_check").await, 0);
+#[tokio::test]
+async fn an_install_at_the_last_release_before_the_baseline_only_has_its_record_rewritten() {
+  let dir = tempfile::tempdir().expect("a scratch directory");
+  let db = installed(&dir.path().join("warmer.sqlite"), BEFORE.len()).await;
+  let before = shape(&db).await;
+
+  up(&db).await.expect("the store migrates");
+  assert_eq!(recorded(&db).await, BASELINE);
+  assert_eq!(shape(&db).await, before);
+  assert_eq!(value::<String>(&db, r#"SELECT "name" FROM "consumers""#).await, "alpha");
+
+  // A second start finds the baseline recorded and changes nothing.
+  up(&db).await.expect("the store migrates again");
+  assert_eq!(recorded(&db).await, BASELINE);
+  assert_eq!(shape(&db).await, before);
+}
+
+#[tokio::test]
+async fn an_install_short_of_the_last_release_before_the_baseline_is_refused() {
+  let dir = tempfile::tempdir().expect("a scratch directory");
+  let db = installed(&dir.path().join("warmer.sqlite"), 2).await;
+
+  let refused = up(&db).await.expect_err("a store short of the last release is refused").to_string();
+  assert!(refused.contains(BEFORE[1]), "{refused}");
+  assert_eq!(recorded(&db).await, BEFORE[..2].join(","));
 }

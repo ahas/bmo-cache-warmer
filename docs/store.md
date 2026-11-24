@@ -44,10 +44,17 @@ does not have.
 
 ## How the shape moves
 
+- **From the 1.0.0 baseline.** The shape starts at one migration that makes every table with its indexes
+  and the round's one row; its way down drops every table.
 - **Only by a migration.** Each migration is one step with its way up and its way down, run in order
   and recorded in the store, so a store opened by a newer service is brought up to it and one step
   can be undone.
 - **A released migration is never edited.** A change to the shape is a new migration after the last.
+- **An install from before 1.0.0 is taken as it stands.** A store whose record names every migration of
+  the last release before 1.0.0, and nothing else, already holds the baseline's shape: the record is
+  rewritten to name the baseline alone, in one transaction, and no table and no row is touched. A store
+  whose record names only part of them is refused, with the migration it stopped at; it is brought to the
+  last release before 1.0.0 by that release first.
 
 ## The snapshot
 

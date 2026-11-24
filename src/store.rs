@@ -11,7 +11,6 @@ use sea_orm::{
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use crate::migration::{Migrator, MigratorTrait};
 use crate::schedule::{Candidate, Clocks, Group as PlannedGroup, Record, is_on};
 
 /// The store, open and migrated.
@@ -435,7 +434,7 @@ impl Store {
       .map_err(|error| DbErr::Conn(RuntimeErr::SqlxError(error)))?;
     let db = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
 
-    Migrator::up(&db, None).await?;
+    crate::migration::up(&db).await?;
     Ok(Self { db })
   }
 
