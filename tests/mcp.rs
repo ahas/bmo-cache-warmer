@@ -167,7 +167,7 @@ fn the_server_lists_exactly_the_six_tools_to_a_harness() {
   );
   let initialized = hear();
   assert_eq!(initialized["result"]["serverInfo"]["name"], "bmo-cache-warmer");
-  assert_eq!(initialized["result"]["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+  assert_eq!(initialized["result"]["serverInfo"]["version"], bmo_cache_warmer::VERSION);
   say(&mut input, json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
   say(&mut input, json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
   let listed = hear();

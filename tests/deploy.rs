@@ -225,7 +225,7 @@ async fn the_binarys_health_ends_0_only_where_the_service_answers_ready_to_its_t
   assert_eq!(ready.status.code(), Some(0), "{}", said(&ready));
   assert_eq!(
     said(&ready),
-    format!("The service is ready, at version {}.\n", env!("CARGO_PKG_VERSION"))
+    format!("The service is ready, at version {}.\n", bmo_cache_warmer::VERSION)
   );
   let refused = health("another").await.unwrap();
   assert_eq!(refused.status.code(), Some(1));

@@ -26,7 +26,7 @@ use tokio::signal::unix::{SignalKind, signal};
 // argument is absent, or the settings file where neither names it. A subcommand stands in for the
 // service, and the service's settings are then not asked for.
 #[derive(Parser)]
-#[command(version, about)]
+#[command(version = bmo_cache_warmer::VERSION, about)]
 struct Settings {
   #[command(subcommand)]
   command: Option<Command>,

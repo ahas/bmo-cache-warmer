@@ -26,10 +26,8 @@ fn the_kept_document_is_the_one_the_code_writes() {
 #[test]
 fn the_document_carries_the_version_the_routes_the_events_the_hook_and_a_route_for_every_tool() {
   let document = openapi();
-  let version = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/VERSION")).unwrap();
-
   assert_eq!(document["openapi"], "3.1.0");
-  assert_eq!(document["info"]["version"], version.trim());
+  assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
   assert_eq!(document["x-harness"]["plugin"], "bmo-cache-warmer");
   assert_eq!(document["x-harness"]["mcp"], "bmo-cache-warmer mcp");
   assert_eq!(

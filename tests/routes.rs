@@ -141,7 +141,7 @@ async fn health_answers_ready_and_the_version() {
     served.get("/health").await,
     (
       StatusCode::OK,
-      json!({ "ready": true, "reason": null, "version": env!("CARGO_PKG_VERSION") })
+      json!({ "ready": true, "reason": null, "version": bmo_cache_warmer::VERSION })
     )
   );
 }

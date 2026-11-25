@@ -39,9 +39,9 @@ At the root stand the workspace's Cargo manifest, which is also the service pack
 
 ## Version
 
-- **One version for the repository,** the workspace's, which every member package inherits.
-  `VERSION` holds it and each package's version equals it.
-- **How a change moves it** is stated in `docs/api.md`, 「Versioning」.
+- **The version is the set's,** read off the git tag when a build is made; the workspace's version, which
+  every member package inherits, is a placeholder that never moves.
+- **How it is read and answered** is stated in `docs/api.md`, 「Versioning」.
 
 ## Commands
 

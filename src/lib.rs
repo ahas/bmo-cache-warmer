@@ -23,3 +23,11 @@ pub mod store;
 pub mod ticker;
 pub mod wire;
 pub mod words;
+
+/// The version the warmer's health, its MCP server and its command name: the set's version the build was
+/// made at, which the testbed hands the build as `BMO_VERSION`, else the manifest's placeholder (bmo-chat's
+/// `docs/conventions.md`, 「Versions」).
+pub const VERSION: &str = match option_env!("BMO_VERSION") {
+  Some(version) => version,
+  None => env!("CARGO_PKG_VERSION"),
+};

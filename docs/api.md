@@ -14,18 +14,15 @@ makes are pings to the URLs consumers registered.
 
 ## Versioning
 
-The repository has one version (semver): the workspace's in the root `Cargo.toml`, which every member
-package inherits, and `VERSION` at the root holds the same. The health route, the OpenAPI document and
-the MCP server all answer it. This document and `docs/openapi.json` change in the same commit as the
-boundary they state.
+The version is the set's (bmo-chat's `docs/conventions.md`, 「Versions」): a release tags the commit
+`v<version>` and makes no commit, and a build reads its version off the tag, which the testbed hands it as
+`BMO_VERSION`. The health route, the MCP server and the command's `--version` answer it. The workspace's
+version in the root `Cargo.toml`, which every member package inherits, and the OpenAPI document's
+`info.version` are a placeholder that never moves. This document and `docs/openapi.json` change in the same
+commit as the boundary they state, and no change moves a version.
 
-- **Before the first release the version is `0.1.0` and counts revisions.** The first version, `0.1.0`,
-  is the base. Every later version bump is one revision, written `0.1.0-rev.<n>` with `n` counting the
-  bumps since the base from 1. Major, minor and patch do not move before the first release, whatever
-  the change, a breaking one included.
-- **The first release drops the suffix,** and from then on the version moves by semver: a change to a
-  contract an existing caller reads moves the major version, an addition the minor, anything else
-  the patch.
+- **Toward the next release,** a change to a contract an existing caller reads counts as a major step, an
+  addition as a minor one, anything else as a patch.
 
 ## The contract
 
