@@ -16,6 +16,7 @@ pub mod pass;
 pub mod policy;
 pub mod routes;
 pub mod service;
+pub mod settings;
 pub mod snapshot;
 pub mod stop;
 pub mod store;

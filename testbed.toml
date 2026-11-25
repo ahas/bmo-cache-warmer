@@ -27,8 +27,9 @@ binaries = ["bmo-cache-warmer"]
 root = "~/.local/share/bmo-cache-warmer"
 data_root = "~/.local/share/bmo-cache-warmer/data"
 units = ["deploy/systemd/*.service"]
-# Answers 0 once the service answers ready on its address, asked with the token in the data root.
-health = "~/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer health --address http://127.0.0.1:9023 --token-file ~/.local/share/bmo-cache-warmer/data/token"
+# Answers 0 once the service answers ready at the address the release's settings name, asked with the
+# token file they name.
+health = "~/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer health"
 
 # The service's bearer token, made once where none stands yet and kept across deployments, so the callers
 # given it keep reaching every route (docs/api.md, "The deployed service").
@@ -42,6 +43,24 @@ mkdir -p "$(dirname "$token")"
 if [ ! -s "$token" ]; then
   (umask 077 && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$token")
 fi
+'''
+
+# The settings the release reads, the data root's settings.toml linked as the release's own (docs/api.md,
+# "The deployed service"). An install writes the file with the port it chose before the first deployment;
+# a deployment that finds none writes one naming the warmer's preferred port and the store and the token
+# file in the data root, and never changes a file that stands.
+[[deploy.step]]
+id = "settings"
+phase = "before-flip"
+command = '''
+set -eu
+data="$HOME/.local/share/bmo-cache-warmer/data"
+mkdir -p "$data"
+if [ ! -e "$data/settings.toml" ]; then
+  printf 'listen = "127.0.0.1:9023"\nstore = "%s/warmer.sqlite"\ntoken_file = "%s/token"\n' "$data" "$data" > "$data/settings.toml.new"
+  mv "$data/settings.toml.new" "$data/settings.toml"
+fi
+ln -sfn "$data/settings.toml" settings.toml
 '''
 
 # The binary, linked into the folder holding `bmo`, so a harness starts the MCP server as

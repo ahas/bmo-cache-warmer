@@ -12,9 +12,6 @@ use crate::wire::{
   Round, RoundPatch, Subject, SubjectPatch, Target, TargetBody, TargetQuery, TargetUse, UseBody, WireError,
 };
 
-/// The address the deployed service listens at, where a caller names none.
-pub const DEFAULT_ADDRESS: &str = "http://127.0.0.1:9023";
-
 /// Why a call came to no answer of the route's shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientFailure {

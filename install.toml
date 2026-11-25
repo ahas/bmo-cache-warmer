@@ -1,7 +1,7 @@
 # What installing the cache warmer on a fresh machine needs, read by the testbed's install verb (bmo-testbed's
-# docs/install.md, "The install declaration"). The service reads no settings file: its address, store and token
-# file stand in its user unit, and a deployment makes its bearer token once in its own data root
-# (docs/api.md, "The deployed service"). It calls no other unit, so it names no upstream.
+# docs/install.md, "The install declaration"). The service reads its address, store and token file from the
+# settings file in its own data root, and a deployment makes its bearer token once beside it (docs/api.md, "The
+# deployed service"). It calls no other unit, so it names no upstream.
 
 install = 1
 
@@ -15,10 +15,19 @@ what = "Rust's Cargo, which a deployment builds the service with: `curl https://
 program = "cc"
 what = "A C compiler, which builds the SQLite the store is bundled with: the `build-essential` package."
 
-# The address the user unit and the health check both name.
+# The port the settings name, which the service listens on and its health and its callers reach.
 [[port]]
 name = "cache-warmer.server"
 number = 9023
+
+# The settings file the release links as its own, in the warmer's own data root.
+[[settings]]
+file = "prefix:bmo-cache-warmer/data/settings.toml"
+text = """
+listen = "127.0.0.1:{{port.cache-warmer.server}}"
+store = "{{prefix}}/bmo-cache-warmer/data/warmer.sqlite"
+token_file = "{{prefix}}/bmo-cache-warmer/data/token"
+"""
 
 # The console reaches the warmer's keepalive view with the token its deployment mints, so these lines wait until
 # that token stands.

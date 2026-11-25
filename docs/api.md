@@ -374,19 +374,36 @@ to use it.
 ## The binary
 
 `bmo-cache-warmer` with no subcommand is the service. Each setting is given as an argument or, where
-the argument is absent, in the environment.
+the argument is absent, in the environment, or, where neither names it, in the settings file
+(「The settings file」).
 
 | Command | Argument | Environment | Meaning |
 | --- | --- | --- | --- |
-| the service | `--listen` | `CACHE_WARMER_LISTEN` | the IP address and port to listen on, on loopback |
-| the service | `--store` | `CACHE_WARMER_STORE` | the path of the store's SQLite file (`docs/store.md`), created where missing |
-| the service | `--token-file` | `CACHE_WARMER_TOKEN_FILE` | the file holding the bearer token every route takes |
-| `mcp`, `health` | `--address` | `CACHE_WARMER_ADDRESS` | the service's address; `http://127.0.0.1:9023` when absent |
+| the service, `mcp`, `health` | `--settings` | `CACHE_WARMER_SETTINGS` | the settings file; `settings.toml` in the folder above the one holding the binary when absent |
+| the service | `--listen` | `CACHE_WARMER_LISTEN` | the IP address and port to listen on, on loopback; the settings' `listen` when absent |
+| the service | `--store` | `CACHE_WARMER_STORE` | the path of the store's SQLite file (`docs/store.md`), created where missing; the settings' `store` when absent |
+| the service | `--token-file` | `CACHE_WARMER_TOKEN_FILE` | the file holding the bearer token every route takes; the settings' `token_file` when absent |
+| `mcp`, `health` | `--address` | `CACHE_WARMER_ADDRESS` | the service's address; `http://` and the settings' `listen` when absent |
 | `mcp`, `health` | `--token` | `CACHE_WARMER_TOKEN` | the bearer token itself |
-| `mcp`, `health` | `--token-file` | `CACHE_WARMER_TOKEN_FILE` | the file holding the token, where no token is given |
+| `mcp`, `health` | `--token-file` | `CACHE_WARMER_TOKEN_FILE` | the file holding the token, where no token is given; the settings' `token_file` when absent |
 | `snapshot` | `--store` | `CACHE_WARMER_STORE` | the store's SQLite file to copy |
 | `snapshot` | `--into` | `BMO_BACKUP_SNAPSHOT_DIR` | the directory the copy and its manifest are written into, made where missing |
 | `verify` | `--from` | `BMO_BACKUP_SNAPSHOT_DIR` | the directory holding a snapshot to check |
+
+### The settings file
+
+The settings file is TOML with three keys, each optional: `listen`, the IP address and port the
+service listens on and `mcp` and `health` reach it at; `store`, the store's SQLite file; and
+`token_file`, the file holding the bearer token. A path is read as it is written. A key it does not
+name refuses the file. The service, `mcp` and `health` read the same file, so a command reaches the
+service at the address the service was told to listen on, with the token it was told to take.
+
+- **A file `--settings` or `CACHE_WARMER_SETTINGS` names must read,** or the command stops with a
+  sentence saying why.
+- **The file beside the release is read only where it stands:** `settings.toml` in the folder above
+  the binary's own, the binary's path read with every link resolved, so the binary linked under
+  another name reads its release's settings too. Where it stands nowhere, every setting comes from the
+  arguments and the environment alone.
 
 ### The service
 
@@ -415,9 +432,9 @@ The service stops on SIGTERM or SIGINT by draining, and exits 0 once the drain e
 - **`mcp`** serves the harness plugin's MCP server on standard input and output until its input ends.
 - **`health`** asks `GET /health` and exits 0 when the service answers ready, with one English sentence
   on standard output; anything else exits 1 with a sentence on standard error saying what it found.
-- **Neither starts without a token:** neither `--token` nor `--token-file` given, or a token file that
-  does not read or holds nothing, is refused with the command line's usage or a sentence, and a
-  non-zero exit.
+- **Neither starts without an address and a token:** no address given and no `listen` in the
+  settings, neither `--token` nor `--token-file` given and no `token_file` in the settings, or a token
+  file that does not read or holds nothing, is refused with a sentence and a non-zero exit.
 
 ### `snapshot` and `verify`
 
@@ -434,13 +451,18 @@ What a snapshot holds and how it is judged is `docs/store.md`, 「The snapshot�
 
 ## The deployed service
 
-- **It listens on `127.0.0.1:9023`.** Callers reach it there; no sibling repository declares the port.
+- **Its settings are the file `settings.toml` in its data root,** which each release links as its own
+  `settings.toml` (「The settings file」), so the unit, `health` and `mcp` read one address, one store and
+  one token file. An install writes the file with the port it chose for the warmer, the store and the
+  token file in the data root, and writes the same port into each caller's settings. A deployment that
+  finds no settings file in the data root writes one naming `127.0.0.1:9023`, the warmer's preferred
+  port, and that store and token file, and never changes a file that stands.
 - **It runs as the user unit `bmo-cache-warmer.service`,** the repository's one service, from the
   release binary in its deploy tree under `~/.local/share/bmo-cache-warmer`. A deployment links the
   binary into the folder holding `bmo`, so `bmo-cache-warmer mcp` starts by its name.
 - **Its store is `warmer.sqlite` in its own data root,** `~/.local/share/bmo-cache-warmer/data`, inside
   no checkout and no release, so a release leaves it alone. The unit makes the folder where it is
-  missing.
+  missing, and the backup reads the store there.
 - **Its bearer token is the file `token` in the data root.** A deployment makes it once where none
   stands and keeps it across deployments; a caller is given the same token through its own settings.
 - **A deployment takes a backup before anything changes,** into
@@ -457,9 +479,10 @@ What a snapshot holds and how it is judged is `docs/store.md`, 「The snapshot�
   the service to end, which the service's drain deadline bounds (「The service」); it never escalates
   to a kill.
 
-The unit in `deploy/systemd/` and the testbed declaration's `[deploy]` table state these. Tests in
-`tests/` hold the three to the same address and token file, and the backup to the unit's binary and
-store.
+The unit in `deploy/systemd/`, the testbed declaration's `[deploy]` table and the install declaration
+state these. Tests in `tests/` hold the unit and the health to the release's settings and no address of
+their own, the deployment's settings and the install's to one store and token file, the health to the
+address its settings name, and the backup to the unit's binary and the settings' store.
 
 ## What stays the consumer's
 

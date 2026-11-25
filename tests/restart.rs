@@ -147,6 +147,7 @@ fn service(dir: &Path, address: SocketAddr) -> Child {
     .env_remove("CACHE_WARMER_LISTEN")
     .env_remove("CACHE_WARMER_STORE")
     .env_remove("CACHE_WARMER_TOKEN_FILE")
+    .env_remove("CACHE_WARMER_SETTINGS")
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::piped())

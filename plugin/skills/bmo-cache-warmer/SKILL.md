@@ -19,10 +19,12 @@ Register the server with the harness as a stdio MCP server:
 bmo-cache-warmer mcp
 ```
 
-It reaches the service at `http://127.0.0.1:9023`, or the address `--address` or `CACHE_WARMER_ADDRESS` names.
-The service's bearer token goes in `CACHE_WARMER_TOKEN` or `--token`; where neither is set, the server reads the
-file `CACHE_WARMER_TOKEN_FILE` or `--token-file` names. It does not start without one. A wrong token answers
-every tool with a 401 `unauthorized` error.
+It reaches the service at the address `--address` or `CACHE_WARMER_ADDRESS` names, else at the `listen` the
+deployed settings name. The service's bearer token goes in `CACHE_WARMER_TOKEN` or `--token`; where neither is
+set, the server reads the file `CACHE_WARMER_TOKEN_FILE` or `--token-file` names, else the settings'
+`token_file`. The settings are the release's `settings.toml`, or the file `--settings` or
+`CACHE_WARMER_SETTINGS` names. It does not start without an address and a token. A wrong token answers every
+tool with a 401 `unauthorized` error.
 
 ## What to do first
 

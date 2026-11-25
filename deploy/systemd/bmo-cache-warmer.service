@@ -1,6 +1,6 @@
 # The warmer's user unit (docs/api.md, "The deployed service"). A deployment links it from the deploy
-# tree and restarts it as the repository's one service; it runs the release binary, listens on loopback,
-# takes the bearer token the deployment keeps in the data root, and keeps its store there too.
+# tree and restarts it as the repository's one service; it runs the release binary, which reads its
+# address, its store and its token file from the release's settings.toml, linked to the data root's.
 [Unit]
 Description=bmo-cache-warmer: keeps registered prompt-cache prefixes warm
 After=network-online.target
@@ -8,9 +8,6 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/.local/share/bmo-cache-warmer/deploy
-Environment=CACHE_WARMER_LISTEN=127.0.0.1:9023
-Environment=CACHE_WARMER_STORE=%h/.local/share/bmo-cache-warmer/data/warmer.sqlite
-Environment=CACHE_WARMER_TOKEN_FILE=%h/.local/share/bmo-cache-warmer/data/token
 # The store's file is made where missing, its folder is not.
 ExecStartPre=/usr/bin/mkdir -p %h/.local/share/bmo-cache-warmer/data
 ExecStart=%h/.local/share/bmo-cache-warmer/deploy/bin/bmo-cache-warmer

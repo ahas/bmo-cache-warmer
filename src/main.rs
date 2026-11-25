@@ -1,4 +1,5 @@
-//! The service binary (docs/api.md, "The binary"): serves the warmer's routes and runs its pass on the
+//! The service binary (docs/api.md, "The binary"): with its settings from its arguments, its environment
+//! and its settings file, serves the warmer's routes and runs its pass on the
 //! round's beat until SIGTERM or SIGINT drains it, or, started with a subcommand, serves the harness
 //! plugin's MCP server, asks the service's health, or takes or checks a snapshot of the store.
 
@@ -7,12 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use bmo_cache_warmer::client::{DEFAULT_ADDRESS, WarmerClient};
+use bmo_cache_warmer::client::WarmerClient;
 use bmo_cache_warmer::clock::SystemClock;
 use bmo_cache_warmer::mcp::WarmerServer;
 use bmo_cache_warmer::pass::Warmer;
 use bmo_cache_warmer::policy::Policy;
 use bmo_cache_warmer::service::{self, Ended};
+use bmo_cache_warmer::settings::SettingsFile;
 use bmo_cache_warmer::snapshot::{self, Manifest};
 use bmo_cache_warmer::store::Store;
 use clap::{Args, Parser, Subcommand};
@@ -21,39 +23,52 @@ use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 
 // The settings the supervisor starts the service with: each an argument, or the environment where the
-// argument is absent. A subcommand stands in for the service, and the service's settings are then not
-// asked for.
+// argument is absent, or the settings file where neither names it. A subcommand stands in for the
+// service, and the service's settings are then not asked for.
 #[derive(Parser)]
-#[command(version, about, subcommand_negates_reqs = true)]
+#[command(version, about)]
 struct Settings {
   #[command(subcommand)]
   command: Option<Command>,
-  /// The IP address and port to listen on, on loopback.
-  #[arg(long, env = "CACHE_WARMER_LISTEN", required = true)]
+  #[command(flatten)]
+  file: FileArg,
+  /// The IP address and port to listen on, on loopback; the settings' `listen` where absent.
+  #[arg(long, env = "CACHE_WARMER_LISTEN")]
   listen: Option<SocketAddr>,
-  /// The path of the store's SQLite file, created where missing.
-  #[arg(long, env = "CACHE_WARMER_STORE", required = true)]
+  /// The path of the store's SQLite file, created where missing; the settings' `store` where absent.
+  #[arg(long, env = "CACHE_WARMER_STORE")]
   store: Option<PathBuf>,
-  /// The file holding the bearer token every route takes.
-  #[arg(long, env = "CACHE_WARMER_TOKEN_FILE", required = true)]
+  /// The file holding the bearer token every route takes; the settings' `token_file` where absent.
+  #[arg(long, env = "CACHE_WARMER_TOKEN_FILE")]
   token_file: Option<PathBuf>,
+}
+
+/// The settings file a command reads.
+#[derive(Args)]
+struct FileArg {
+  /// The settings file; `settings.toml` in the folder above the binary's own where absent.
+  #[arg(long = "settings", env = "CACHE_WARMER_SETTINGS")]
+  settings: Option<PathBuf>,
+}
+
+impl FileArg {
+  fn read(&self) -> Result<SettingsFile, String> {
+    SettingsFile::find(self.settings.as_deref())
+  }
 }
 
 /// Where a command reaches the service, and with which token.
 #[derive(Args)]
 struct Reach {
-  /// The service's address.
-  #[arg(long, env = "CACHE_WARMER_ADDRESS", default_value = DEFAULT_ADDRESS)]
-  address: String,
+  #[command(flatten)]
+  file: FileArg,
+  /// The service's address; `http://` and the settings' `listen` where absent.
+  #[arg(long, env = "CACHE_WARMER_ADDRESS")]
+  address: Option<String>,
   /// The bearer token itself.
-  #[arg(
-    long,
-    env = "CACHE_WARMER_TOKEN",
-    hide_env_values = true,
-    required_unless_present = "token_file"
-  )]
+  #[arg(long, env = "CACHE_WARMER_TOKEN", hide_env_values = true)]
   token: Option<String>,
-  /// The file holding the bearer token, where no token is given.
+  /// The file holding the bearer token, where no token is given; the settings' `token_file` where absent.
   #[arg(long, env = "CACHE_WARMER_TOKEN_FILE")]
   token_file: Option<PathBuf>,
 }
@@ -89,9 +104,9 @@ async fn main() -> ExitCode {
     Some(Command::Health(reach)) => health(reach).await,
     Some(Command::Snapshot { store, into }) => take(&store, &into).await,
     Some(Command::Verify { from }) => verify(&from).await,
-    None => match (settings.listen, settings.store, settings.token_file) {
-      (Some(listen), Some(store), Some(token_file)) => serve(listen, store, &token_file).await,
-      _ => unreachable!("the command line requires every setting where no subcommand is given"),
+    None => match service_settings(settings) {
+      Ok((listen, store, token_file)) => serve(listen, store, &token_file).await,
+      Err(sentence) => Err(sentence),
     },
   };
   match done {
@@ -115,19 +130,52 @@ fn token_in(file: &Path) -> Result<String, String> {
   Ok(token.to_owned())
 }
 
+/// The service's three settings, each from the command line or the environment where it names it, else
+/// from the settings file.
+fn service_settings(settings: Settings) -> Result<(SocketAddr, PathBuf, PathBuf), String> {
+  let file = settings.file.read()?;
+  let missing = |what: &str, argument: &str, key: &str| {
+    format!("No {what} is given: name it with --{argument}, or as `{key}` in the settings file.")
+  };
+  let listen = settings
+    .listen
+    .or(file.listen)
+    .ok_or_else(|| missing("listen address", "listen", "listen"))?;
+  let store = settings.store.or(file.store).ok_or_else(|| missing("store", "store", "store"))?;
+  let token_file = settings
+    .token_file
+    .or(file.token_file)
+    .ok_or_else(|| missing("token file", "token-file", "token_file"))?;
+  Ok((listen, store, token_file))
+}
+
 /// The client a command reaches the service with.
 fn client(reach: Reach) -> Result<WarmerClient, String> {
+  let file = reach.file.read()?;
+  let address = match (reach.address.filter(|address| !address.is_empty()), file.listen) {
+    (Some(address), _) => address,
+    (None, Some(listen)) => format!("http://{listen}"),
+    (None, None) => {
+      return Err(
+        "No address is given: name one with --address, or as `listen` in the settings file.".to_owned(),
+      );
+    }
+  };
   let token = match (
     reach.token.map(|token| token.trim().to_owned()).filter(|token| !token.is_empty()),
-    reach.token_file,
+    reach.token_file.or(file.token_file),
   ) {
     (Some(token), _) => token,
     (None, Some(file)) => token_in(&file)?,
-    (None, None) => return Err("No token is given: name one with --token or --token-file.".to_owned()),
+    (None, None) => {
+      return Err(
+        "No token is given: name one with --token or --token-file, or as `token_file` in the settings file."
+          .to_owned(),
+      );
+    }
   };
 
-  WarmerClient::new(&reach.address, token)
-    .map_err(|failure| format!("The address does not serve: {failure}."))
+  WarmerClient::new(&address, token).map_err(|failure| format!("The address does not serve: {failure}."))
 }
 
 /// Opens the store, binds the port, starts the ticker and serves the routes until SIGTERM or SIGINT, then

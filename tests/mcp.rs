@@ -122,6 +122,7 @@ fn started(arguments: &[&str]) -> Child {
     .env_remove("CACHE_WARMER_TOKEN")
     .env_remove("CACHE_WARMER_TOKEN_FILE")
     .env_remove("CACHE_WARMER_ADDRESS")
+    .env_remove("CACHE_WARMER_SETTINGS")
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
@@ -184,8 +185,22 @@ fn the_server_lists_exactly_the_six_tools_to_a_harness() {
 
 #[test]
 fn the_server_does_not_start_without_a_token() {
-  let mut child = started(&[]);
+  let mut child = started(&["--address", "http://[::1]:1"]);
   drop(child.stdin.take());
 
-  assert_eq!(ended(&mut child), Some(2));
+  assert_eq!(ended(&mut child), Some(1));
+  let mut said = String::new();
+  std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut said).unwrap();
+  assert!(said.starts_with("No token is given"), "{said}");
+}
+
+#[test]
+fn the_server_does_not_start_without_an_address() {
+  let mut child = started(&["--token", "t"]);
+  drop(child.stdin.take());
+
+  assert_eq!(ended(&mut child), Some(1));
+  let mut said = String::new();
+  std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut said).unwrap();
+  assert!(said.starts_with("No address is given"), "{said}");
 }
